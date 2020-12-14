@@ -126,7 +126,7 @@ PROFILE_UI_FIELDS_MAPPING = [
     {"General": ["name", "owners", "distro", "parent", "enable_menu",
                  "autoinstall", "kernel_options", "kernel_options_post",
                  "autoinstall_meta", "proxy", "repos", "comment"]},
-    {"Advanced": ["enable_gpxe", "dhcp_tag", "server", "next_server"]},
+    {"Advanced": ["enable_gpxe", "dhcp_tag", "server", "next_server", "filename"]},
     {"Networking Global": ["name_servers", "name_servers_search"]},
     {"Management": ["mgmt_classes", "mgmt_parameters", "boot_files",
                     "fetchable_files", "template_files"]},
@@ -139,7 +139,7 @@ REPO_UI_FIELDS_MAPPING = [
     {"General": ["name", "owners", "arch", "breed", "keep_updated",
                  "mirror", "rpm_list", "comment"]},
     {"Advanced": ["apt_components", "apt_dists", "createrepo_flags",
-                  "environment", "mirror_locally", "priority", "yumopts"]}
+                  "environment", "mirror_locally", "priority", "yumopts", "rsyncopts"]}
 ]
 
 SYSTEM_UI_FIELDS_MAPPING = [
@@ -147,7 +147,7 @@ SYSTEM_UI_FIELDS_MAPPING = [
                  "kernel_options", "kernel_options_post",
                  "autoinstall_meta", "boot_loader", "proxy",
                  "netboot_enabled", "autoinstall", "comment"]},
-    {"Advanced": ["enable_gpxe", "server", "next_server"]},
+    {"Advanced": ["enable_gpxe", "server", "next_server", "filename"]},
     {"Networking (Global)": ["hostname", "gateway", "name_servers",
                              "name_servers_search", "ipv6_default_device",
                              "ipv6_autoconfiguration"]},

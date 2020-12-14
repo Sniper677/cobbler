@@ -22,42 +22,47 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
-
+import json
 import glob
 import os
+from pathlib import Path
+import stat
 import re
 import time
 
-from cexceptions import CX
-import clogger
-import templar
-import utils
+from cobbler.cexceptions import CX
+from cobbler import clogger
+from cobbler import utils
+
+# Try the power command 3 times before giving up. Some power switches are flaky.
+POWER_RETRIES = 3
 
 
 def get_power_types():
     """
-    Get possible power management types
+    Get possible power management types.
 
-    @return list possible power management types
+    :returns: Possible power management types
+    :rtype: list
     """
 
     power_types = []
-    power_template = re.compile(r'fence_(.*)')
     fence_files = glob.glob("/usr/sbin/fence_*") + glob.glob("/sbin/fence_*")
     for x in fence_files:
-        templated_x = power_template.search(x).group(1)
-        if templated_x not in power_types:
-            power_types.append(templated_x)
+        fence_name = os.path.basename(x).replace("fence_", "")
+        if fence_name not in power_types:
+            power_types.append(fence_name)
     power_types.sort()
     return power_types
 
 
 def validate_power_type(power_type):
     """
-    Check if a power management type is valid
+    Check if a power management type is valid.
 
-    @param str power_type power management type
-    @raise CX if power management type is invalid
+    :param power_type: Power management type.
+    :type power_type: str
+    :raise CX: if power management type is invalid
     """
 
     power_types = get_power_types()
@@ -71,8 +76,10 @@ def get_power_command(power_type):
     """
     Get power management command path
 
-    @param str power_type power management type
-    @return str power management command path
+    :param power_type: power management type
+    :type power_type: str
+    :returns: power management command path
+    :rtype: str or None
     """
 
     if power_type:
@@ -85,7 +92,7 @@ def get_power_command(power_type):
     return None
 
 
-class PowerManager:
+class PowerManager(object):
     """
     Handles power management in systems
     """
@@ -94,9 +101,12 @@ class PowerManager:
         """
         Constructor
 
-        @param CobblerAPI api Cobbler API
-        @param CollectionManager collection_mgr collection manager
-        @param Logger logger logger
+        :param api: Cobbler API
+        :type api: CobblerAPI
+        :param collection_mgr: collection manager
+        :type collection_mgr: CollectionManager
+        :param logger: A logger object to audit the actions of the object instance.
+        :type logger: Logger
         """
 
         self.collection_mgr = collection_mgr
@@ -106,23 +116,95 @@ class PowerManager:
             logger = clogger.Logger()
         self.logger = logger
 
+    def _check_power_conf(self, system, logger, user, password):
+        """
+        Prints a warning for invalid power configurations.
+
+        :param user: The username for the power command of the system. This overrules the one specified in the system.
+        :param password: The password for the power command of the system. This overrules the one specified in the
+                         system.
+        :param system: Cobbler system
+        :type system: System
+        :param logger: logger
+        :type logger: Logger
+        """
+
+        if (system.power_pass or password) and system.power_identity_file:
+            logger.warning("Both password and identity-file are specified")
+        if system.power_identity_file:
+            ident_path = Path(system.power_identity_file)
+            if not ident_path.exists():
+                logger.warning("identity-file " + system.power_identity_file + " does not exist")
+            else:
+                ident_stat = stat.S_IMODE(ident_path.stat().st_mode)
+                if (ident_stat & stat.S_IRWXO) or (ident_stat & stat.S_IRWXG):
+                    logger.warning("identity-file " + system.power_identity_file +
+                                   " must not be read/write/exec by group or others")
+        if not system.power_address:
+            logger.warning("power-address is missing")
+        if not (system.power_user or user):
+            logger.warning("power-user is missing")
+        if not (system.power_pass or password) and not system.power_identity_file:
+            logger.warning("neither power-identity-file nor power-password specified")
+
+    def _get_power_input(self, system, power_operation, logger, user, password):
+        """
+        Creates an option string for the fence agent from the system data. This is an internal method.
+
+        :param system: Cobbler system
+        :type system: System
+        :param power_operation: power operation. Valid values: on, off, status. Rebooting is implemented as a set of 2
+                                operations (off and on) in a higher level method.
+        :type power_operation: str
+        :param logger: logger
+        :type logger: Logger
+        :param user: user to override system.power_user
+        :type user: str
+        :param password: password to override system.power_pass
+        :type password: str
+        :return: The option string for the fencer agent.
+        :rtype: str
+        """
+
+        self._check_power_conf(system, logger, user, password)
+        power_input = ""
+        if power_operation is None or power_operation not in ['on', 'off', 'status']:
+            raise CX("invalid power operation")
+        power_input += "action=" + power_operation + "\n"
+        if system.power_address:
+            power_input += "ip=" + system.power_address + "\n"
+        if system.power_user:
+            power_input += "username=" + system.power_user + "\n"
+        if system.power_id:
+            power_input += "plug=" + system.power_id + "\n"
+        if system.power_pass:
+            power_input += "password=" + system.power_pass + "\n"
+        if system.power_identity_file:
+            power_input += "identity-file=" + system.power_identity_file + "\n"
+        if system.power_options:
+            power_input += system.power_options + "\n"
+        return power_input
+
     def _power(self, system, power_operation, user=None, password=None, logger=None):
         """
         Performs a power operation on a system.
         Internal method
 
-        @param System system Cobbler system
-        @param str power_operation power operation. Valid values: on, off, status.
-                Rebooting is implemented as a set of 2 operations (off and on) in
-                a higher level method.
-        @param str user power management user. If user and password are not
-                supplied, environment variables COBBLER_POWER_USER and
-                COBBLER_POWER_PASS will be used.
-        @param str password power management password
-        @param Logger logger logger
-        @return bool/None if power operation is 'status', return if system is on;
-                otherwise, return None
-        @raise CX if there are errors
+        :param system: Cobbler system
+        :type system: System
+        :param power_operation: power operation. Valid values: on, off, status. Rebooting is implemented as a set of 2
+                                operations (off and on) in a higher level method.
+        :type power_operation: str
+        :param user: power management user. If user and password are not supplied, environment variables
+                     COBBLER_POWER_USER and COBBLER_POWER_PASS will be used.
+        :type user: str
+        :param password: power management password
+        :type password: str
+        :param logger: logger
+        :type logger: Logger
+        :return: bool/None if power operation is 'status', return if system is on; otherwise, return None
+        :rtype: bool or None
+        :raise CX: if there are errors
         """
 
         if logger is None:
@@ -132,42 +214,35 @@ class PowerManager:
         if not power_command:
             utils.die(logger, "no power type set for system")
 
-        meta = utils.blender(self.api, False, system)
-        meta["power_mode"] = power_operation
+        power_info = {"type": system.power_type, "address": system.power_address, "user": system.power_user,
+                      "id": system.power_id, "options": system.power_options,
+                      "identity_file": system.power_identity_file}
 
-        # allow command line overrides of the username/password
-        if user is not None:
-            meta["power_user"] = user
-        if password is not None:
-            meta["power_pass"] = password
-
-        logger.info("cobbler power configuration is:")
-        logger.info("      type   : %s" % system.power_type)
-        logger.info("      address: %s" % system.power_address)
-        logger.info("      user   : %s" % system.power_user)
-        logger.info("      id     : %s" % system.power_id)
+        logger.info("cobbler power configuration is: %s" % json.dumps(power_info))
 
         # if no username/password data, check the environment
-        if meta.get("power_user", "") == "":
-            meta["power_user"] = os.environ.get("COBBLER_POWER_USER", "")
-        if meta.get("power_pass", "") == "":
-            meta["power_pass"] = os.environ.get("COBBLER_POWER_PASS", "")
+        if not system.power_user and not user:
+            user = os.environ.get("COBBLER_POWER_USER", "")
+        if not system.power_pass and not password:
+            password = os.environ.get("COBBLER_POWER_PASS", "")
 
-        template = self.get_power_template(system.power_type)
-        tmp = templar.Templar(self.collection_mgr)
-        template_data = tmp.render(template, meta, None, system)
+        power_input = self._get_power_input(system, power_operation, logger, user, password)
+
         logger.info("power command: %s" % power_command)
-        logger.info("power command input: %s" % template_data)
+        logger.info("power command input: %s" % power_input)
 
-        # Try the power command 5 times before giving up.
-        # Some power switches are flakey
-        for x in range(0, 5):
-            output, rc = utils.subprocess_sp(logger, power_command, shell=False, input=template_data)
-            if rc == 0:
-                # If the desired state is actually a query for the status
-                # return different information than command return code
-                if power_operation == 'status':
-                    match = re.match('^(Status:|.+power\s=)\s(on|off)$', output, re.IGNORECASE | re.MULTILINE)
+        rc = -1
+
+        for x in range(0, POWER_RETRIES):
+            output, rc = utils.subprocess_sp(logger, power_command, shell=False, input=power_input)
+            # Allowed return codes: 0, 1, 2
+            # Source: https://github.com/ClusterLabs/fence-agents/blob/master/doc/FenceAgentAPI.md#agent-operations-and-return-values
+            if power_operation in ("on", "off", "reboot"):
+                if rc == 0:
+                    return None
+            elif power_operation == "status":
+                if rc in (0, 2):
+                    match = re.match(r'^(Status:|.+power\s=)\s(on|off)$', output, re.IGNORECASE | re.MULTILINE)
                     if match:
                         power_status = match.groups()[1]
                         if power_status.lower() == 'on':
@@ -177,9 +252,7 @@ class PowerManager:
                     error_msg = "command succeeded (rc=%s), but output ('%s') was not understood" % (rc, output)
                     utils.die(logger, error_msg)
                     raise CX(error_msg)
-                return None
-            else:
-                time.sleep(2)
+            time.sleep(2)
 
         if not rc == 0:
             error_msg = "command failed (rc=%s), please validate the physical setup and cobbler config" % rc
@@ -190,10 +263,14 @@ class PowerManager:
         """
         Powers up a system that has power management configured.
 
-        @param System system Cobbler system
-        @param str user power management user
-        @param str password power management password
-        @param Logger logger logger
+        :param system: Cobbler system
+        :type system: System
+        :param user: power management user
+        :type user: str
+        :param password: power management password
+        :type password: str
+        :param logger: logger
+        :type logger: Logger
         """
 
         self._power(system, "on", user, password, logger)
@@ -202,10 +279,14 @@ class PowerManager:
         """
         Powers down a system that has power management configured.
 
-        @param System system Cobbler system
-        @param str user power management user
-        @param str password power management password
-        @param Logger logger logger
+        :param system: Cobbler system
+        :type system: System
+        :param user: power management user
+        :type user: str
+        :param password: power management password
+        :type password: str
+        :param logger: logger
+        :type logger: Logger
         """
 
         self._power(system, "off", user, password, logger)
@@ -214,10 +295,14 @@ class PowerManager:
         """
         Reboot a system that has power management configured.
 
-        @param System system Cobbler system
-        @param str user power management user
-        @param str password power management password
-        @param Logger logger logger
+        :param system: Cobbler system
+        :type system: System
+        :param user: power management user
+        :type user: str
+        :param password: power management password
+        :type password: str
+        :param logger: logger
+        :type logger: Logger
         """
 
         self.power_off(system, user, password, logger=logger)
@@ -228,30 +313,16 @@ class PowerManager:
         """
         Get power status for a system that has power management configured.
 
-        @param System system Cobbler system
-        @param str user power management user
-        @param str password power management password
-        @param Logger logger logger
-        @return bool if system is powered on
+        :param system: Cobbler system
+        :type system: System
+        :param user: power management user
+        :type user: str
+        :param password: power management password
+        :type password: str
+        :param logger: logger
+        :type logger: Logger
+        :return: if system is powered on
+        :rtype: bool
         """
 
         return self._power(system, "status", user, password, logger)
-
-    def get_power_template(self, power_type):
-        """
-        Get power management template
-
-        @param str power_type power management type
-        @return str power management input template
-        """
-
-        if power_type:
-            power_template = "%s/fence_%s.template" % (self.settings.power_template_dir, power_type)
-            if os.path.isfile(power_template):
-                f = open(power_template)
-                template = f.read()
-                f.close()
-                return template
-
-        # return a generic template if a specific one wasn't found
-        return "action=$power_mode\nlogin=$power_user\npasswd=$power_pass\nipaddr=$power_address\nport=$power_id"

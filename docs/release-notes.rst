@@ -1,5 +1,6 @@
+***********************************
 Release Notes for Cobbler 3.0.0
--------------------------------
+***********************************
 
 Enhancements
 ++++++++++++
@@ -8,7 +9,7 @@ Enhancements
 * Add a whitelist of directories in order to persist a ``cobbler sync``.
 * Add proxy support for get-loaders, signature update and reposync.
 * Add initial support for DJBDNS.
-* Enable external YUM repo mirroring through a proxy server. 
+* Enable external YUM repo mirroring through a proxy server.
 * DHCP configuration now also supports the per interface gateway setting.
 * A new interface_type ``BMC`` was added which also can be managed with DHCP.
 * Yaboot was updated to 1.3.17.
@@ -61,7 +62,8 @@ Upgrade notes
 +++++++++++++
 
 * Support for LDAP configuration through Koan has been removed.
-* Support for redhat_management (Spacewalk/Satelite) has been moved to contrib. Users of this functionality should checkout contrib/redhat-management/README.
+* Support for redhat_management (Spacewalk/Satelite) has been moved to contrib. Users of this functionality should
+  checkout contrib/redhat-management/README.
 * Monit support has been removed; you really need to use a CMS to manage your services.
 * Support for remote kickstart templates and files been removed (eg. kickstart=http://).
 * All object names are now validated like that of the system object.
@@ -72,6 +74,7 @@ Upgrade notes
 * Support for deprecated fieldnames (``subnet``, ``bonding_master``, ``bonding``) has been removed.
 * Cobbler now requires python 2.7 and Koan now requires python 2.6.
 * Red Hat specific default kernel options have been removed from the settings file.
-* Support for Func integration has been moved to contrib. Users of this functionality should checkout contrib/func/README.
+* Support for Func integration has been moved to contrib. Users of this functionality should checkout
+  contrib/func/README.
 * Deprecated Koan LiveCD: moved to contrib.
 

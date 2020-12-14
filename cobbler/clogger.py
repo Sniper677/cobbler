@@ -21,60 +21,91 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
+import logging
+import logging.config
 import os
-import time
 
-ERROR = "ERROR"
-WARNING = "WARNING"
-DEBUG = "DEBUG"
-INFO = "INFO"
+# Temporary hack, a clean solution seems to be tricky.
+# Defining a variable in our Apache startup code seem not to work, it is still set later when this code is executed via
+# Cobbler.
+
+# This is necessary to prevent apache to try to access the file
+if os.geteuid() == 0:
+    logging.config.fileConfig('/etc/cobbler/logging_config.conf')
 
 
-class Logger:
+class Logger(object):
+    """
+    Logger class for Cobbler which is wrapped around the Python3 standard logger.
 
-    def __init__(self, logfile="/var/log/cobbler/cobbler.log"):
-        self.logfile = None
+    Please don't use this. Utilize the standard logger from Python3 so we can get rid of this eventually.
+    """
+    def __init__(self, logfile=None):
+        """
+        The default constructor.
 
-        # Main logfile is append mode, other logfiles not.
-        if not os.path.exists(logfile) and os.path.exists(os.path.dirname(logfile)):
-            self.logfile = open(logfile, "a")
-            self.logfile.close()
+        :param logfile: If this argument is passed, then the log will not be written to the default location.
+        :type logfile: str
+        """
+        if not logfile:
+            self.logger = logging.getLogger('root')
+        else:
+            self.logger = logging.getLogger(str(id(self)))
+            self.logger.propagate = False
+            self.logger.addHandler(logging.FileHandler(filename=logfile))
 
-        try:
-            self.logfile = open(logfile, "a")
-        except IOError:
-            # You likely don't have write access, this logger will just print
-            # things to stdout.
-            pass
+    def critical(self, msg):
+        """
+        A critical message which is related to a problem which will halt Cobbler.
 
-    def warning(self, msg):
-        self.__write(WARNING, msg)
+        :param msg: The message to be logged.
+        :type msg: str
+        """
+        self.logger.critical(msg)
 
     def error(self, msg):
-        self.__write(ERROR, msg)
+        """
+        An error message which means that Cobbler will not halt but the future actions may not be executed correctly.
 
-    def debug(self, msg):
-        self.__write(DEBUG, msg)
+        :param msg: The message to be logged.
+        :type msg: str
+        """
+        self.logger.error(msg)
+
+    def warning(self, msg):
+        """
+        A warning message which could possibly indicate performance or functional problems.
+
+        :param msg: The message to be logged.
+        :type msg: str
+        """
+        self.logger.warning(msg)
 
     def info(self, msg):
-        self.__write(INFO, msg)
+        """
+        An informational message which should be written to the target log.
+
+        :param msg: The message to be logged.
+        :type msg: str
+        """
+        self.logger.info(msg)
+
+    def debug(self, msg):
+        """
+        A message which is useful for finding errors or performance problems. Should not be visible in the production
+        usage of Cobbler.
+
+        :param msg: The message to be logged.
+        :type msg: str
+        """
+        self.logger.debug(msg)
 
     def flat(self, msg):
-        self.__write(None, msg)
+        """
+        This uses the print function from the std library. Avoid using this. This is only used for the report command
+        in ``cobbler/actions/report.py``
 
-    def __write(self, level, msg):
-        if level is not None:
-            msg = "%s - %s | %s" % (time.asctime(), level, msg)
-
-        if self.logfile is not None:
-            self.logfile.write(msg)
-            self.logfile.write("\n")
-            self.logfile.flush()
-        else:
-            print(msg)
-
-    def handle(self):
-        return self.logfile
-
-    def close(self):
-        self.logfile.close()
+        :param msg: The message to be logged.
+        :type msg: str
+        """
+        print(msg)

@@ -23,43 +23,61 @@ module for generating configuration manifest using autoinstall_meta data,
 mgmtclasses, resources, and templates for a given system (hostname)
 """
 
-from Cheetah.Template import Template
+from builtins import object
 import simplejson as json
 import string
 
-from cexceptions import CX
-import clogger
+from cobbler.cexceptions import CX
+from cobbler import clogger
+from cobbler import template_api
 import cobbler.api as capi
 import cobbler.utils
-import utils
+from cobbler import utils
 
 
-class ConfigGen:
+class ConfigGen(object):
     """
-    Generate configuration data for Cobbler's management resources:
-    repos, files and packages. Mainly used by Koan to configure systems.
+    Generate configuration data for Cobbler's management resources: repos, files and packages.
+    Mainly used by Koan to configure systems.
     """
 
     def __init__(self, hostname):
-        """Constructor. Requires a Cobbler API handle."""
+        """
+        Constructor. Requires a Cobbler API handle.
+
+        :param hostname: The hostname to run config-generation for.
+        """
         self.hostname = hostname
         self.handle = capi.CobblerAPI()
         self.system = self.handle.find_system(hostname=self.hostname)
         self.host_vars = self.get_cobbler_resource('autoinstall_meta')
-        self.logger = clogger.Logger("/var/log/cobbler/cobbler.log")
+        self.logger = clogger.Logger()
         self.mgmtclasses = self.get_cobbler_resource('mgmt_classes')
 
     # ----------------------------------------------------------------------
 
     def resolve_resource_var(self, string_data):
-        """Substitute variables in strings."""
+        """
+        Substitute variables in strings.
+
+        :param string_data: The string with the data to substitute.
+        :return: A str with the substituted data.
+        :rtype: str
+        """
         data = string.Template(string_data).substitute(self.host_vars)
         return data
 
     # ----------------------------------------------------------------------
 
     def resolve_resource_list(self, list_data):
-        """Substitute variables in lists. Return new list."""
+        """
+        Substitute variables in lists. Return new list.
+
+        :param list_data: The list with the data to substitute.
+        :type list_data: list
+        :return: A list with the substituted data.
+        :rtype: list
+        """
         new_list = []
         for item in list_data:
             new_list.append(string.Template(item).substitute(self.host_vars))
@@ -68,7 +86,12 @@ class ConfigGen:
     # ----------------------------------------------------------------------
 
     def get_cobbler_resource(self, resource):
-        """Wrapper around cobbler blender method"""
+        """
+        Wrapper around Cobbler blender method
+
+        :param resource: Not known what this actually is doing.
+        :return: Not known what this actually is doing.
+        """
         return cobbler.utils.blender(self.handle, False, self.system)[resource]
 
     # ----------------------------------------------------------------------
@@ -76,7 +99,9 @@ class ConfigGen:
     def gen_config_data(self):
         """
         Generate configuration data for repos, files and packages.
-        Returns a dict.
+
+        :return: A dict which has all config data in it.
+        :rtype: dict
         """
         config_data = {
             'repo_data': self.handle.get_repo_config_for_system(self.system),
@@ -128,7 +153,7 @@ class ConfigGen:
             if not _file.is_dir:
                 file_data[file]['template'] = self.resolve_resource_var(_file.template)
                 try:
-                    t = Template(file=file_data[file]['template'], searchList=[self.host_vars])
+                    t = template_api.Template(file=file_data[file]['template'], searchList=[self.host_vars])
                     file_data[file]['content'] = t.respond()
                 except:
                     utils.die(self.logger, "Missing template for this file resource %s" % (file_data[file]))
@@ -139,6 +164,10 @@ class ConfigGen:
     # ----------------------------------------------------------------------
 
     def gen_config_data_for_koan(self):
-        """Encode configuration data. Return json object for Koan."""
+        """
+        Encode configuration data. Return json object for Koan.
+
+        :return: A json string for koan.
+        """
         json_config_data = json.JSONEncoder(sort_keys=True, indent=4).encode(self.gen_config_data())
         return json_config_data

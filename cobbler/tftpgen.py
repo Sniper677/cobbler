@@ -24,16 +24,15 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 import os
 import os.path
 import re
-import shutil
 import socket
-import string
+from time import sleep
 
-from cexceptions import CX
-import templar
-import utils
+from cobbler import templar
+from cobbler import utils
+from cobbler.cexceptions import CX
 
 
-class TFTPGen:
+class TFTPGen(object):
     """
     Generate files provided by TFTP server
     """
@@ -51,80 +50,21 @@ class TFTPGen:
         self.repos = collection_mgr.repos()
         self.images = collection_mgr.images()
         self.templar = templar.Templar(collection_mgr)
-        self.bootloc = utils.tftpboot_location()
+        self.bootloc = self.settings.tftpboot_location
 
-    def copy_bootloaders(self):
+    def copy_bootloaders(self, dest):
         """
         Copy bootloaders to the configured tftpboot directory
-        NOTE: we support different arch's if defined in
-        /etc/cobbler/settings.
+        NOTE: we support different arch's if defined in /etc/cobbler/settings.
         """
-        dst = self.bootloc
-        grub_dst = os.path.join(dst, "grub")
-        boot_dst = os.path.join(dst, "boot/grub")
-
-        # copy syslinux from one of two locations
-        try:
-            try:
-                utils.copyfile_pattern(
-                    '/var/lib/cobbler/loaders/pxelinux.0',
-                    dst, api=self.api, cache=False, logger=self.logger)
-                utils.copyfile_pattern(
-                    '/var/lib/cobbler/loaders/menu.c32',
-                    dst, api=self.api, cache=False, logger=self.logger)
-            except:
-                utils.copyfile_pattern(
-                    '/usr/share/syslinux/pxelinux.0',
-                    dst, api=self.api, cache=False, logger=self.logger)
-                utils.copyfile_pattern(
-                    '/usr/share/syslinux/menu.c32',
-                    dst, api=self.api, cache=False, logger=self.logger)
-
-        except:
-            utils.copyfile_pattern(
-                '/usr/lib/syslinux/pxelinux.0',
-                dst, api=self.api, cache=False, logger=self.logger)
-            utils.copyfile_pattern(
-                '/usr/lib/syslinux/menu.c32',
-                dst, api=self.api, cache=False, logger=self.logger)
-
-        # copy yaboot which we include for PowerPC targets
-        utils.copyfile_pattern(
-            '/var/lib/cobbler/loaders/yaboot', dst,
-            require_match=False, api=self.api, cache=False, logger=self.logger)
-
-        utils.copyfile_pattern(
-            '/var/lib/cobbler/loaders/boot/grub/*', boot_dst,
-            require_match=False, api=self.api, cache=False, logger=self.logger)
-
-        try:
-            utils.copyfile_pattern(
-                '/usr/lib/syslinux/memdisk',
-                dst, api=self.api, cache=False, logger=self.logger)
-        except:
-            utils.copyfile_pattern(
-                '/usr/share/syslinux/memdisk', dst,
-                require_match=False, api=self.api, cache=False, logger=self.logger)
-
-        # Copy gPXE/iPXE bootloader if it exists
-        utils.copyfile_pattern(
-            '/usr/share/*pxe/undionly.kpxe', dst,
-            require_match=False, api=self.api, cache=False, logger=self.logger)
-
-        # Copy grub EFI bootloaders if possible:
-        utils.copyfile_pattern(
-            '/var/lib/cobbler/loaders/grub*.efi', grub_dst,
-            require_match=False, api=self.api, cache=False, logger=self.logger)
-
-        pxegrub_imported = False
-        for i in self.distros:
-            if 'nexenta' == i.breed and not pxegrub_imported:
-                # name_without_arch = i.name[:-7] # removing -x86_64 from the fin on the string.
-                if os.path.isdir(os.path.join(self.bootloc, 'boot')):
-                    shutil.rmtree(os.path.join(self.bootloc, 'boot'))
-                shutil.copytree(os.path.join('/var', 'www', 'cobbler', 'distro_mirror', i.name, 'boot'),
-                                os.path.join(self.bootloc, 'boot'))
-                pxegrub_imported = True
+        src = self.settings.bootloaders_dir
+        dest = self.bootloc
+        # unfortunately using shutils copy_tree the dest directory must not exist,
+        # but we must not delete an already partly synced /srv/tftp dir here.
+        # rsync is very convenient here, being very fast on an already copied folder
+        utils.subprocess_call(self.logger, ["rsync", "-rpt", "--copy-links", "--exclude=.cobbler_postun_cleanup", "{src}/".format(src=src), dest], shell=False)
+        src = self.settings.grubconfig_dir
+        utils.subprocess_call(self.logger, ["rsync", "-rpt", "--copy-links", "--exclude=README.grubconfig", "{src}/".format(src=src), dest], shell=False)
 
     def copy_images(self):
         """
@@ -134,65 +74,64 @@ class TFTPGen:
         for i in self.images:
             try:
                 self.copy_single_image_files(i)
-            except CX, e:
+            except CX as e:
                 errors.append(e)
                 self.logger.error(e.value)
 
-        # FIXME: using logging module so this ends up in cobbler.log?
+    def copy_single_distro_file(self, d_file, distro_dir, symlink_ok):
+        """
+        Copy a single file (kernel/initrd) to distro's images directory
+
+        :param  d_file:     distro's kernel/initrd absolut or remote file path value
+        :type   d_file:     str
+        :param  distro_dir: directory (typically in {www,tftp}/images) where to copy the file
+        :type   distro_dir: str
+        :param  symlink_ok: whethere it is ok to symlink the file. Typically false in case the file
+                            is used by daemons run in chroot environments (tftpd,..)
+        :type   symlink_ok: bool
+
+        :raises CX:         Cobbler Exception is raised in case file IO errors or of the remote file
+                            could not be retrieved
+        :return:            None
+        """
+        full_path = utils.find_kernel(d_file)
+
+        if full_path is None:
+            raise CX("File not found: %s, tried to copy to: %s" % (full_path, distro_dir))
+
+        # Koan manages remote kernel/initrd itself, but for consistent PXE
+        # configurations the synchronization is still necessary
+        if not utils.file_is_remote(full_path):
+            b_file = os.path.basename(full_path)
+            dst = os.path.join(distro_dir, b_file)
+            utils.linkfile(full_path, dst, symlink_ok=symlink_ok, api=self.api, logger=self.logger)
+        else:
+            b_file = os.path.basename(full_path)
+            dst = os.path.join(distro_dir, b_file)
+            utils.copyremotefile(full_path, dst, api=None, logger=self.logger)
 
     def copy_single_distro_files(self, d, dirtree, symlink_ok):
+        """
+        Copy the files needed for a single distro.
+
+        :param d: The distro to copy.
+        :param dirtree: This is the root where the images are located. The folder "images" gets automatically appended.
+        :param symlink_ok: If it is okay to use a symlink to link the destination to the source.
+        :type symlink_ok: bool
+        """
+
         distros = os.path.join(dirtree, "images")
         distro_dir = os.path.join(distros, d.name)
         utils.mkdir(distro_dir)
-        kernel = utils.find_kernel(d.kernel)    # full path
-        initrd = utils.find_initrd(d.initrd)    # full path
-
-        if kernel is None:
-            raise CX("kernel not found: %(file)s, distro: %(distro)s" % {"file": d.kernel, "distro": d.name})
-
-        if initrd is None:
-            raise CX("initrd not found: %(file)s, distro: %(distro)s" % {"file": d.initrd, "distro": d.name})
-
-        # Koan manages remote kernel itself, but for consistent PXE
-        # configurations the synchronization is still necessary
-        if not utils.file_is_remote(kernel):
-            b_kernel = os.path.basename(kernel)
-            dst1 = os.path.join(distro_dir, b_kernel)
-            utils.linkfile(kernel, dst1, symlink_ok=symlink_ok, api=self.api, logger=self.logger)
-        else:
-            b_kernel = os.path.basename(kernel)
-            dst1 = os.path.join(distro_dir, b_kernel)
-            utils.copyremotefile(kernel, dst1, api=None, logger=self.logger)
-
-        if not utils.file_is_remote(initrd):
-            b_initrd = os.path.basename(initrd)
-            dst2 = os.path.join(distro_dir, b_initrd)
-            utils.linkfile(initrd, dst2, symlink_ok=symlink_ok, api=self.api, logger=self.logger)
-        else:
-            b_initrd = os.path.basename(initrd)
-            dst1 = os.path.join(distro_dir, b_initrd)
-            utils.copyremotefile(initrd, dst1, api=None, logger=self.logger)
-
-        if "nexenta" == d.breed:
-            try:
-                os.makedirs(os.path.join(distro_dir, 'platform', 'i86pc', 'kernel', 'amd64'))
-                os.makedirs(os.path.join(distro_dir, 'platform', 'i86pc', 'amd64'))
-            except OSError:
-                pass
-            b_kernel = os.path.basename(kernel)
-            utils.linkfile(kernel, os.path.join(distro_dir, 'platform', 'i86pc', 'kernel', 'amd64', b_kernel),
-                           symlink_ok=symlink_ok, api=self.api, logger=self.logger)
-            b_initrd = os.path.basename(initrd)
-            utils.linkfile(initrd, os.path.join(distro_dir, 'platform', 'i86pc', 'amd64', b_initrd),
-                           symlink_ok=symlink_ok, api=self.api, logger=self.logger)
-
-            # the [:-7] removes the architecture
-            if os.path.isdir(os.path.join('/var', 'www', 'cobbler', 'links', d.name, 'install_profiles')):
-                shutil.rmtree(os.path.join('/var', 'www', 'cobbler', 'links', d.name, 'install_profiles'))
-            shutil.copytree(os.path.join('/var', 'lib', 'cobbler', 'autoinstall_templates', 'install_profiles'),
-                            os.path.join('/var', 'www', 'cobbler', 'links', d.name, 'install_profiles'))
+        self.copy_single_distro_file(d.kernel, distro_dir, symlink_ok)
+        self.copy_single_distro_file(d.initrd, distro_dir, symlink_ok)
 
     def copy_single_image_files(self, img):
+        """
+        Copies an image to the images directory of Cobbler.
+
+        :param img: The image to copy.
+        """
         images_dir = os.path.join(self.bootloc, "images2")
         filename = img.file
         if not os.path.exists(filename):
@@ -204,7 +143,13 @@ class TFTPGen:
         utils.linkfile(filename, newfile, api=self.api, logger=self.logger)
 
     def write_all_system_files(self, system, menu_items):
+        """
+        Writes all files for tftp for a given system with the menu items handed to this method. The system must have a
+        profile attached. Otherwise this method throws an error.
 
+        :param system: The system to generate files for.
+        :param menu_items:
+        """
         profile = system.get_conceptual_parent()
         if profile is None:
             raise CX("system %(system)s references a missing profile %(profile)s" % {"system": system.name, "profile": system.profile})
@@ -221,11 +166,78 @@ class TFTPGen:
 
         pxe_metadata = {'pxe_menu_items': menu_items}
 
-        # generate one record for each described NIC ..
-        for (name, interface) in system.interfaces.iteritems():
+        # hack: s390 generates files per system not per interface
+        if not image_based and distro.arch.startswith("s390"):
+            short_name = system.name.split('.')[0]
+            s390_name = 'linux' + short_name[7:10]
+            self.logger.info("Writing s390x pxe config for %s" % short_name)
+            # Always write a system specific _conf and _parm file
+            pxe_f = os.path.join(self.bootloc, "s390x", "s_%s" % s390_name)
+            conf_f = "%s_conf" % pxe_f
+            parm_f = "%s_parm" % pxe_f
 
-            f1 = utils.get_config_filename(system, interface=name)
-            if f1 is None:
+            self.logger.info("Files: (conf,param) - (%s,%s)" % (conf_f, parm_f))
+            blended = utils.blender(self.api, True, system)
+            # FIXME: profiles also need this data!
+            # gather default kernel_options and default kernel_options_s390x
+            kernel_options = self.build_kernel_options(system, profile, distro,
+                                                       image, "s390x", blended.get("autoinstall", ""))
+            kopts_aligned = ""
+            column = 0
+            for option in kernel_options.split():
+                opt_len = len(option)
+                if opt_len > 78:
+                    kopts_aligned += '\n' + option + ' '
+                    column = opt_len + 1
+                    self.logger.error("Kernel paramer [%s] too long %s" % (option, opt_len))
+                    continue
+                if column + opt_len > 78:
+                    kopts_aligned += '\n' + option + ' '
+                    column = opt_len + 1
+                else:
+                    kopts_aligned += option + ' '
+                    column += opt_len + 1
+
+            # Write system specific zPXE file
+            if system.is_management_supported():
+                if system.netboot_enabled:
+                    self.logger.info("S390x: netboot_enabled")
+                    kernel_path = os.path.join("/images", distro.name, os.path.basename(distro.kernel))
+                    initrd_path = os.path.join("/images", distro.name, os.path.basename(distro.initrd))
+                    with open(pxe_f, 'w') as out:
+                        out.write(kernel_path + '\n' + initrd_path + '\n')
+                    with open(parm_f, 'w') as out:
+                        out.write(kopts_aligned)
+                    # Write conf file with one newline in it if netboot is enabled
+                    with open(conf_f, 'w') as out:
+                        out.write('\n')
+                else:
+                    self.logger.info("S390x: netboot_disabled")
+                    # Write empty conf file if netboot is disabled
+                    open(conf_f, 'w').close()
+            else:
+                # ensure the files do exist
+                self.logger.info("S390x: management not supported")
+                utils.rmfile(pxe_f)
+                utils.rmfile(conf_f)
+                utils.rmfile(parm_f)
+            self.logger.info("S390x: pxe: [%s], conf: [%s], parm: [%s]" % (pxe_f, conf_f, parm_f))
+
+            return
+
+        # generate one record for each described NIC ..
+        for (name, interface) in list(system.interfaces.items()):
+
+            pxe_name = system.get_config_filename(interface=name)
+            grub_name = system.get_config_filename(interface=name, loader="grub")
+
+            if pxe_name is not None:
+                pxe_path = os.path.join(self.bootloc, "pxelinux.cfg", pxe_name)
+
+            if grub_name is not None:
+                grub_path = os.path.join(self.bootloc, "grub", "system", grub_name)
+
+            if grub_path is None and pxe_path is None:
                 self.logger.warning("invalid interface recorded for system (%s,%s)" % (system.name, name))
                 continue
 
@@ -235,30 +247,22 @@ class TFTPGen:
                 working_arch = distro.arch
 
             if working_arch is None:
-                raise "internal error, invalid arch supplied"
+                raise CX("internal error, invalid arch supplied")
 
             # for tftp only ...
-            grub_path = None
-            if working_arch in ["i386", "x86", "x86_64", "arm", "standard"]:
-                # pxelinux wants a file named $name under pxelinux.cfg
-                f2 = os.path.join(self.bootloc, "pxelinux.cfg", f1)
+            if working_arch in ["i386", "x86", "x86_64", "arm", "aarch64", "ppc64le", "ppc64el", "standard"]:
+                # ToDo: This is old, move this logic into item_system.get_config_filename()
+                pass
 
-                # Only generating grub menus for these arch's:
-                grub_path = os.path.join(self.bootloc, "grub", f1.upper())
-
-            elif working_arch.startswith("ppc"):
+            elif working_arch == "ppc" or working_arch == "ppc64":
                 # Determine filename for system-specific bootloader config
-                filename = "%s" % utils.get_config_filename(system, interface=name).lower()
+                filename = "%s" % system.get_config_filename(interface=name).lower()
                 # to inherit the distro and system's boot_loader values correctly
                 blended_system = utils.blender(self.api, False, system)
                 if blended_system["boot_loader"] == "pxelinux":
-                    # pxelinux wants a file named $name under pxelinux.cfg
-                    f2 = os.path.join(self.bootloc, "pxelinux.cfg", f1)
-                elif distro.boot_loader == "grub2" or blended_system["boot_loader"] == "grub2":
-                    f2 = os.path.join(self.bootloc, "boot/grub", "grub.cfg-" + filename)
+                    pass
                 else:
-                    f2 = os.path.join(self.bootloc, "etc", filename)
-
+                    pxe_path = os.path.join(self.bootloc, "etc", filename)
                     # Link to the yaboot binary
                     f3 = os.path.join(self.bootloc, "ppc", filename)
                     if os.path.lexists(f3):
@@ -269,119 +273,24 @@ class TFTPGen:
 
             if system.is_management_supported():
                 if not image_based:
-                    self.write_pxe_file(f2, system, profile, distro, working_arch, metadata=pxe_metadata)
+                    if pxe_path:
+                        self.write_pxe_file(pxe_path, system, profile, distro, working_arch, metadata=pxe_metadata)
                     if grub_path:
                         self.write_pxe_file(grub_path, system, profile, distro, working_arch, format="grub")
+                        # Generate a link named after system to the mac file for easier lookup
+                        link_path = os.path.join(self.bootloc, "grub", "system_link", system.name)
+                        if os.path.exists(link_path):
+                            utils.rmfile(link_path)
+                        os.symlink(os.path.join("..", "system", grub_name), link_path)
                 else:
-                    self.write_pxe_file(f2, system, None, None, working_arch, image=profile, metadata=pxe_metadata)
+                    self.write_pxe_file(pxe_path, system, None, None, working_arch, image=profile, metadata=pxe_metadata)
             else:
                 # ensure the file doesn't exist
-                utils.rmfile(f2)
+                utils.rmfile(pxe_path)
                 if grub_path:
                     utils.rmfile(grub_path)
 
     def make_pxe_menu(self):
-        self.make_actual_pxe_menu()
-
-    def get_menu_items(self):
-        """
-        Generates menu items for pxe and grub
-        """
-        # sort the profiles
-        profile_list = [profile for profile in self.profiles]
-
-        def sort_name(a, b):
-            return cmp(a.name, b.name)
-
-        profile_list.sort(sort_name)
-
-        # sort the images
-        image_list = [image for image in self.images]
-        image_list.sort(sort_name)
-
-        # Build out menu items and append each to this master list, used for
-        # the default menus:
-        pxe_menu_items = ""
-        grub_menu_items = ""
-
-        # For now, profiles are the only items we want grub EFI boot menu entries for:
-        for profile in profile_list:
-            if not profile.enable_menu:
-                # This profile has been excluded from the menu
-                continue
-            distro = profile.get_conceptual_parent()
-            if distro.name.find('exenta') != -1:
-                # nexenta has a separate menu
-                continue
-
-            contents = self.write_pxe_file(
-                filename=None,
-                system=None, profile=profile, distro=distro, arch=distro.arch,
-                include_header=False)
-            if contents is not None:
-                pxe_menu_items += contents + "\n"
-
-            grub_contents = self.write_pxe_file(
-                filename=None,
-                system=None, profile=profile, distro=distro, arch=distro.arch,
-                include_header=False, format="grub")
-            if grub_contents is not None:
-                grub_menu_items += grub_contents + "\n"
-
-        # image names towards the bottom
-        for image in image_list:
-            if os.path.exists(image.file):
-                contents = self.write_pxe_file(
-                    filename=None,
-                    system=None, profile=None, distro=None, arch=image.arch,
-                    image=image)
-                if contents is not None:
-                    pxe_menu_items += contents + "\n"
-
-        return {'pxe': pxe_menu_items, 'grub': grub_menu_items}
-
-    def get_menu_items_nexenta(self):
-        """
-        Generates menu items for nexenta
-        """
-        # sort the profiles
-        profile_list = [profile for profile in self.profiles]
-
-        def sort_name(a, b):
-            return cmp(a.name, b.name)
-
-        profile_list.sort(sort_name)
-
-        # Build out menu items and append each to this master list, used for
-        # the default menus:
-        pxe_menu_items = ""
-        grub_menu_items = ""
-
-        # For now, profiles are the only items we want grub EFI boot menu entries for:
-        for profile in profile_list:
-            if not profile.enable_menu:
-                # This profile has been excluded from the menu
-                continue
-            distro = profile.get_conceptual_parent()
-
-            if distro.name.find('nexenta') != -1:
-                contents = self.write_pxe_file(
-                    filename=None,
-                    system=None, profile=profile, distro=distro, arch=distro.arch,
-                    include_header=False)
-                if contents is not None:
-                    pxe_menu_items += contents + "\n"
-
-                grub_contents = self.write_pxe_file(
-                    filename=None,
-                    system=None, profile=profile, distro=distro, arch=distro.arch,
-                    include_header=False, format="nexenta")
-                if grub_contents is not None:
-                    grub_menu_items += grub_contents + "\n"
-
-        return {'pxe': pxe_menu_items, 'grub': grub_menu_items}
-
-    def make_actual_pxe_menu(self):
         """
         Generates both pxe and grub boot menus.
         """
@@ -404,33 +313,108 @@ class TFTPGen:
         template_src.close()
 
         # Write the grub menu:
-        metadata = {"grub_menu_items": menu_items['grub']}
-        outfile = os.path.join(self.bootloc, "grub", "efidefault")
-        template_src = open(os.path.join(self.settings.boot_loader_conf_template_dir, "efidefault.template"))
-        template_data = template_src.read()
-        self.templar.render(template_data, metadata, outfile, None)
-        template_src.close()
+        for arch in utils.get_valid_archs():
+            arch_menu_items = self.get_menu_items(arch)
+            if(arch_menu_items['grub']):
+                outfile = os.path.join(self.bootloc, "grub", "{0}_menu_items.cfg".format(arch))
+                fd = open(outfile, "w+")
+                fd.write(arch_menu_items['grub'])
+                fd.close()
 
-        # write the nexenta menu
-        menu_items = self.get_menu_items_nexenta()
-        metadata = {"grub_menu_items": menu_items['grub']}
-        outfile = os.path.join(self.bootloc, "boot", 'grub', 'menu.lst')
-        template_src = open(os.path.join(self.settings.boot_loader_conf_template_dir, "nexenta_grub_menu.template"))
-        template_data = template_src.read()
-        self.templar.render(template_data, metadata, outfile, None)
-        template_src.close()
+    def get_menu_items(self, arch=None):
+        """
+        Generates menu items for pxe and grub. Grub menu items are grouped into submenus by profile.
+
+        :param arch: The processor architecture to generate the menu items for. (Optional)
+        :type arch: str
+        :returns: A dictionary with the pxe and grub menu items. It has the keys "pxe" and "grub".
+        :rtype: dict
+        """
+        # sort the profiles
+        profile_list = [profile for profile in self.profiles]
+        profile_list = sorted(profile_list, key=lambda profile: profile.name)
+        if arch:
+            profile_list = [profile for profile in profile_list if profile.get_arch() == arch]
+
+        # sort the images
+        image_list = [image for image in self.images]
+        image_list = sorted(image_list, key=lambda image: image.name)
+
+        # Build out menu items and append each to this master list, used for
+        # the default menus:
+        pxe_menu_items = ""
+        grub_menu_items = ""
+
+        # create a dict of menuentries : submenuentries for grub during the creation of the pxe menu
+        submenus = {}
+        for profile in profile_list:
+            if not profile.enable_menu:
+                # This profile has been excluded from the menu
+                continue
+            distro = profile.get_conceptual_parent()
+            if distro not in submenus:
+                submenus[distro] = []
+            submenus[distro].append(profile)
+
+            contents = self.write_pxe_file(
+                filename=None,
+                system=None, profile=profile, distro=distro, arch=distro.arch,
+                include_header=False)
+            if contents is not None:
+                pxe_menu_items += contents + "\n"
+
+        for distro in submenus:
+            grub_menu_items += "submenu '{0}' --class gnu-linux --class gnu --class os {{\n".format(distro.name)
+            for profile in submenus[distro]:
+                grub_contents = self.write_pxe_file(
+                    filename=None,
+                    system=None, profile=profile, distro=distro, arch=distro.arch,
+                    include_header=False, format="grub")
+                if grub_contents is not None:
+                    grub_menu_items += grub_contents + "\n"
+            grub_menu_items += "}\n"
+
+        # image names towards the bottom
+        for image in image_list:
+            if os.path.exists(image.file):
+                contents = self.write_pxe_file(
+                    filename=None,
+                    system=None, profile=None, distro=None, arch=image.arch,
+                    image=image)
+                if contents is not None:
+                    pxe_menu_items += contents + "\n"
+
+        return {'pxe': pxe_menu_items, 'grub': grub_menu_items}
 
     def write_pxe_file(self, filename, system, profile, distro, arch,
                        image=None, include_header=True, metadata=None, format="pxe"):
         """
         Write a configuration file for the boot loader(s).
-        More system-specific configuration may come in later, if so
-        that would appear inside the system object in api.py
 
+        More system-specific configuration may come in later, if so that would appear inside the system object in api.py
         Can be used for different formats, "pxe" (default) and "grub".
+
+        :param filename: If present this writes the output into the giving filename. If not present this method just
+                         returns the generated configuration.
+        :param system: If you supply a system there are other templates used then when using only a profile/image/
+                       distro.
+        :param profile: The profile to generate the pxe-file for.
+        :param distro: If you don't ship an image, this is needed. Otherwise this just supplies information needed for
+                       the templates.
+        :param arch: The processor architecture to generate the pxefile for.
+        :type arch: str
+        :param image: If you want to be able to deploy an image, supply this parameter.
+        :param include_header: Not used parameter currently.
+        :type include_header: bool
+        :param metadata: Pass additional parameters to the ones being collected during the method.
+        :param format: May be "grub" or "pxe".
+        :type format: str
+        :return: The generated filecontent for the required item.
+        :rtype: str
         """
+
         if arch is None:
-            raise "missing arch"
+            raise CX("missing arch")
 
         if image and not os.path.exists(image.file):
             return None     # nfs:// URLs or something, can't use for TFTP
@@ -440,7 +424,7 @@ class TFTPGen:
 
         (rval, settings) = utils.input_string_or_dict(self.settings.to_dict())
         if rval:
-            for key in settings.keys():
+            for key in list(settings.keys()):
                 metadata[key] = settings[key]
         # ---
         # just some random variables
@@ -455,17 +439,22 @@ class TFTPGen:
 
         if image is None:
             # not image based, it's something normalish
-
             img_path = os.path.join("/images", distro.name)
+            if format == "grub":
+                if distro.remote_grub_kernel:
+                    kernel_path = distro.remote_grub_kernel
+                if distro.remote_grub_initrd:
+                    initrd_path = distro.remote_grub_initrd
 
-            if 'nexenta' == distro.breed:
-                kernel_path = os.path.join("/images", distro.name, 'platform', 'i86pc', 'kernel', 'amd64', os.path.basename(distro.kernel))
-                initrd_path = os.path.join("/images", distro.name, 'platform', 'i86pc', 'amd64', os.path.basename(distro.initrd))
-            elif 'http' in distro.kernel and 'http' in distro.initrd:
-                kernel_path = distro.kernel
-                initrd_path = distro.initrd
-            else:
+            if 'http' in distro.kernel and 'http' in distro.initrd:
+                if not kernel_path:
+                    kernel_path = distro.kernel
+                if not initrd_path:
+                    initrd_path = distro.initrd
+
+            if not kernel_path:
                 kernel_path = os.path.join("/images", distro.name, os.path.basename(distro.kernel))
+            if not initrd_path:
                 initrd_path = os.path.join("/images", distro.name, os.path.basename(distro.initrd))
 
             # Find the automatic installation file if we inherit from another profile
@@ -475,8 +464,7 @@ class TFTPGen:
                 blended = utils.blender(self.api, True, profile)
             autoinstall_path = blended.get("autoinstall", "")
 
-            # update metadata with all known information
-            # this allows for more powerful templating
+            # update metadata with all known information this allows for more powerful templating
             metadata.update(blended)
 
         else:
@@ -504,6 +492,7 @@ class TFTPGen:
             if format == "grub":
                 if system.netboot_enabled:
                     template = os.path.join(self.settings.boot_loader_conf_template_dir, "grubsystem.template")
+                    buffer += 'set system="{system}"\n'.format(system=system.name)
                 else:
                     local = os.path.join(self.settings.boot_loader_conf_template_dir, "grublocal.template")
                     if os.path.exists(local):
@@ -512,46 +501,38 @@ class TFTPGen:
                 if system.netboot_enabled:
                     template = os.path.join(self.settings.boot_loader_conf_template_dir, "pxesystem.template")
 
-                    if arch.startswith("ppc"):
+                    if arch == "ppc" or arch == "ppc64":
                         # to inherit the distro and system's boot_loader values correctly
                         blended_system = utils.blender(self.api, False, system)
                         if blended_system["boot_loader"] == "pxelinux":
                             template = os.path.join(self.settings.boot_loader_conf_template_dir, "pxesystem_ppc.template")
-                        elif distro.boot_loader == "grub2" or blended_system["boot_loader"] == "grub2":
-                            template = os.path.join(self.settings.boot_loader_conf_template_dir, "grub2_ppc.template")
                         else:
                             template = os.path.join(self.settings.boot_loader_conf_template_dir, "yaboot_ppc.template")
                     elif arch.startswith("arm"):
                         template = os.path.join(self.settings.boot_loader_conf_template_dir, "pxesystem_arm.template")
                     elif distro and distro.os_version.startswith("esxi"):
-                        # ESXi uses a very different pxe method, using more files than
-                        # a standard automatic installation file and different options -
-                        # so giving it a dedicated PXE template makes more sense than
+                        # ESXi uses a very different pxe method, using more files than a standard automatic installation
+                        # file and different options - so giving it a dedicated PXE template makes more sense than
                         # shoe-horning it into the existing templates
                         template = os.path.join(self.settings.boot_loader_conf_template_dir, "pxesystem_esxi.template")
                 else:
                     # local booting on ppc requires removing the system-specific dhcpd.conf filename
-                    if arch is not None and arch.startswith("ppc"):
+                    if arch is not None and (arch == "ppc" or arch == "ppc64"):
                         # Disable yaboot network booting for all interfaces on the system
-                        for (name, interface) in system.interfaces.iteritems():
+                        for (name, interface) in list(system.interfaces.items()):
 
-                            filename = "%s" % utils.get_config_filename(system, interface=name).lower()
+                            filename = "%s" % system.get_config_filename(interface=name).lower()
 
                             # Remove symlink to the yaboot binary
                             f3 = os.path.join(self.bootloc, "ppc", filename)
-                            if os.path.lexists(f3):
-                                utils.rmfile(f3)
-
-                            # Remove the interface-specific config file
-                            f3 = os.path.join(self.bootloc, "boot/grub", "grub.cfg-" + filename)
                             if os.path.lexists(f3):
                                 utils.rmfile(f3)
                             f3 = os.path.join(self.bootloc, "etc", filename)
                             if os.path.lexists(f3):
                                 utils.rmfile(f3)
 
-                        # Yaboot/OF doesn't support booting locally once you've
-                        # booted off the network, so nothing left to do
+                        # Yaboot/OF doesn't support booting locally once you've booted off the network, so nothing left
+                        # to do
                         return None
                     else:
                         template = os.path.join(self.settings.boot_loader_conf_template_dir, "pxelocal.template")
@@ -564,8 +545,6 @@ class TFTPGen:
             elif distro and distro.os_version.startswith("esxi"):
                 # ESXi uses a very different pxe method, see comment above in the system section
                 template = os.path.join(self.settings.boot_loader_conf_template_dir, "pxeprofile_esxi.template")
-            elif 'nexenta' == format:
-                template = os.path.join(self.settings.boot_loader_conf_template_dir, 'nexenta_profile.template')
             else:
                 template = os.path.join(self.settings.boot_loader_conf_template_dir, "pxeprofile.template")
 
@@ -586,10 +565,9 @@ class TFTPGen:
         else:
             append_line = "append "
         append_line = "%s%s" % (append_line, kernel_options)
-        if arch.startswith("ppc"):
+        if arch == "ppc" or arch == "ppc64":
             # remove the prefix "append"
-            # TODO: this looks like it's removing more than append, really
-            # not sure what's up here...
+            # TODO: this looks like it's removing more than append, really not sure what's up here...
             append_line = append_line[7:]
         if distro and distro.os_version.startswith("xenserver620"):
             append_line = "%s" % (kernel_options)
@@ -606,7 +584,20 @@ class TFTPGen:
             metadata["profile_name"] = image.name
 
         if system:
-            metadata["system_name"] = system.name
+            if system.serial_device or system.serial_baud_rate:
+                if system.serial_device:
+                    serial_device = system.serial_device
+                else:
+                    serial_device = 0
+                if system.serial_baud_rate:
+                    serial_baud_rate = system.serial_baud_rate
+                else:
+                    serial_baud_rate = 115200
+
+                if format == "pxe":
+                    buffer += "serial %d %d\n" % (serial_device, serial_baud_rate)
+                elif format == "grub":
+                    buffer += "set serial_console=true\nset serial_baud={baud}\nset serial_line={device}\n".format(baud=serial_baud_rate, device=serial_device)
 
         # get the template
         if kernel_path is not None:
@@ -618,28 +609,50 @@ class TFTPGen:
             template_data = "\n"
 
         # save file and/or return results, depending on how called.
-        buffer = self.templar.render(template_data, metadata, None)
+        buffer += self.templar.render(template_data, metadata, None)
+
         if filename is not None:
             self.logger.info("generating: %s" % filename)
-            fd = open(filename, "w")
-            fd.write(buffer)
-            fd.close()
+            # This try-except is a work-around for the cases where 'open' throws
+            # the FileNotFoundError for not apparent reason.
+            try:
+                with open(filename, "w") as fd:
+                    fd.write(buffer)
+            except FileNotFoundError as e:
+                self.logger.error("Got \"{}\" while trying to write {}".format(e, filename))
+                self.logger.error("Trying to write {} again after some delay.".format(filename))
+                sleep(1)
+                with open(filename, "w") as fd:
+                    fd.write(buffer)
         return buffer
 
-    def build_kernel_options(self, system, profile, distro, image, arch,
-                             autoinstall_path):
+    def build_kernel_options(self, system, profile, distro, image, arch, autoinstall_path):
         """
         Builds the full kernel options line.
+
+        :param system: The system to generate the kernel options for.
+        :param profile: Although the system contains the profile please specify it explicitly here.
+        :param distro: Although the profile contains the distribution please specify it explicitly here.
+        :param image: The image to generate the kernel options for.
+        :param arch: The processor architecture to generate the kernel options for.
+        :type arch: str
+        :param autoinstall_path: The autoinstallation path. Normally this will be a URL because you want to pass a link
+                                 to an autoyast, preseed or kickstart file.
+        :return: The generated kernal line options.
+        :rtype: str
         """
 
         management_interface = None
+        management_mac = None
         if system is not None:
             blended = utils.blender(self.api, False, system)
             # find the first management interface
             try:
-                for intf in system.interfaces.keys():
+                for intf in list(system.interfaces.keys()):
                     if system.interfaces[intf]["management"]:
                         management_interface = intf
+                        if system.interfaces[intf]["mac_address"]:
+                            management_mac = system.interfaces[intf]["mac_address"]
                         break
             except:
                 # just skip this then
@@ -653,12 +666,15 @@ class TFTPGen:
         kopts = blended.get("kernel_options", dict())
         kopts = utils.revert_strip_none(kopts)
 
+        # SUSE and other distro specific kernel additions or modificatins
+        utils.kopts_overwrite(system, distro, kopts, self.settings)
+
         # since network needs to be configured again (it was already in netboot) when kernel boots
         # and we choose to do it dinamically, we need to set 'ksdevice' to one of
         # the interfaces' MAC addresses in ppc systems.
         # ksdevice=bootif is not useful in yaboot, as the "ipappend" line is a pxe feature.
-        if system and arch and "ppc" in arch:
-            for intf in system.interfaces.keys():
+        if system and arch and (arch == "ppc" or arch == "ppc64"):
+            for intf in list(system.interfaces.keys()):
                 # use first interface with defined IP and MAC, since these are required
                 # fields in a DHCP entry
                 mac_address = system.interfaces[intf]['mac_address']
@@ -675,21 +691,41 @@ class TFTPGen:
         append_line = "%s %s" % (append_line, hkopts)
 
         # automatic installation file path rewriting (get URLs for local files)
-        if autoinstall_path is not None and autoinstall_path != "":
+        if autoinstall_path:
 
             # FIXME: need to make shorter rewrite rules for these URLs
 
-            try:
-                ipaddress = socket.gethostbyname_ex(blended["http_server"])[2][0]
-            except socket.gaierror:
-                ipaddress = blended["http_server"]
+            # changing http_server's server component to its IP address was intruduced with
+            # https://github.com/cobbler/cobbler/commit/588756aa7aefc122310847d007becf3112647944
+            # to shorten the message length for S390 systems.
+            # On multi-homed cobbler servers, this can lead to serious problems when installing
+            # systems in a dedicated isolated installation subnet:
+            # - typically, $server is reachable by name (DNS resolution assumed) both during PXE
+            #   install and during production, but via different IP addresses
+            # - $http_server is explicitly constructed from $server
+            # - the IP address for $server may resolv differently between cobbler server (production)
+            #   and installing system
+            # - using IP($http_server) below may need to set $server in a way that matches the installation
+            #   network
+            # - using $server for later repository access then will fail, because the installation address
+            #   isn't reachable for production systems
+            #
+            # In order to make the revert less intrusive, it'll depend on a configuration setting
+            if self.settings and self.settings.convert_server_to_ip:
+                try:
+                    httpserveraddress = socket.gethostbyname_ex(blended["http_server"])[2][0]
+                except socket.gaierror:
+                    httpserveraddress = blended["http_server"]
+            else:
+                httpserveraddress = blended["http_server"]
+
             URL_REGEX = "[a-zA-Z]*://.*"
             local_autoinstall_file = not re.match(URL_REGEX, autoinstall_path)
             if local_autoinstall_file:
                 if system is not None:
-                    autoinstall_path = "http://%s/cblr/svc/op/autoinstall/system/%s" % (ipaddress, system.name)
+                    autoinstall_path = "http://%s/cblr/svc/op/autoinstall/system/%s" % (httpserveraddress, system.name)
                 else:
-                    autoinstall_path = "http://%s/cblr/svc/op/autoinstall/profile/%s" % (ipaddress, profile.name)
+                    autoinstall_path = "http://%s/cblr/svc/op/autoinstall/profile/%s" % (httpserveraddress, profile.name)
 
             if distro.breed is None or distro.breed == "redhat":
 
@@ -700,6 +736,8 @@ class TFTPGen:
                     append_line = append_line.replace('ksdevice=bootif', 'ksdevice=${net0/mac}')
             elif distro.breed == "suse":
                 append_line = "%s autoyast=%s" % (append_line, autoinstall_path)
+                if management_mac and not distro.arch.startswith("s390"):
+                    append_line += " netdevice=%s" % management_mac
             elif distro.breed == "debian" or distro.breed == "ubuntu":
                 append_line = "%s auto-install/enable=true priority=critical netcfg/choose_interface=auto url=%s" % (append_line, autoinstall_path)
                 if management_interface:
@@ -709,7 +747,7 @@ class TFTPGen:
 
                 # rework kernel options for debian distros
                 translations = {'ksdevice': "interface", 'lang': "locale"}
-                for k, v in translations.iteritems():
+                for k, v in list(translations.items()):
                     append_line = append_line.replace("%s=" % k, "%s=" % v)
 
                 # interface=bootif causes a failure
@@ -767,8 +805,6 @@ class TFTPGen:
             # A similar issue exists with suite name, as installer requires
             # the existence of "stable" in the dists directory
             append_line = "%s suite=%s" % (append_line, distro.os_version)
-        elif distro is not None and distro.breed == 'nexenta':
-            append_line = "-B iso_nfs_path=%s:/var/www/cobbler/links/%s,auto_install=1" % (blended['next_server'], distro.name)
 
         # append necessary kernel args for arm architectures
         if arch is not None and arch.startswith("arm"):
@@ -780,23 +816,40 @@ class TFTPGen:
             blended.update(blended["autoinstall_meta"])
         append_line = self.templar.render(append_line, utils.flatten(blended), None)
 
+        # For now console=ttySx,BAUDRATE are only set for systems
+        # This could get enhanced for profile/distro via utils.blender (inheritance)
+        # This also is architecture specific. E.g: Some ARM consoles need: console=ttyAMAx,BAUDRATE
+        # I guess we need a serial_kernel_dev = param, that can be set to "ttyAMA" if needed.
+        if system and arch == "x86_64":
+            if system.serial_device or system.serial_baud_rate:
+                if system.serial_device:
+                    serial_device = system.serial_device
+                else:
+                    serial_device = 0
+                if system.serial_baud_rate:
+                    serial_baud_rate = system.serial_baud_rate
+                else:
+                    serial_baud_rate = 115200
+
+                append_line = "%s console=ttyS%s,%s" % (append_line, serial_device, serial_baud_rate)
+
         # FIXME - the append_line length limit is architecture specific
-        if len(append_line) >= 255:
-            self.logger.warning("warning: kernel option length exceeds 255")
+        if len(append_line) >= 1023:
+            self.logger.warning("warning: kernel option length exceeds 1023")
 
         return append_line
 
     def write_templates(self, obj, write_file=False, path=None):
         """
-        A semi-generic function that will take an object
-        with a template_files dict {source:destiation}, and
-        generate a rendered file.  The write_file option
-        allows for generating of the rendered output without
-        actually creating any files.
+        A semi-generic function that will take an object with a template_files dict {source:destiation}, and generate a
+        rendered file. The write_file option allows for generating of the rendered output without actually creating any
+        files.
 
-        The return value is a dict of the destination file
-        names (after variable substitution is done) and the
-        data in the file.
+        :param obj: The object to write the template files for.
+        :param write_file: If the generated template should be written to the disk.
+        :type write_file: bool
+        :param path: TODO: A useless parameter?
+        :return: A dict of the destination file names (after variable substitution is done) and the data in the file.
         """
         self.logger.info("Writing template files for %s" % obj.name)
 
@@ -810,7 +863,7 @@ class TFTPGen:
         blended = utils.blender(self.api, False, obj)
 
         if obj.COLLECTION_TYPE == "distro":
-            if re.search("esxi[56]", obj.os_version) is not None:
+            if re.search("esxi[567]", obj.os_version) is not None:
                 realbootcfg = open(os.path.join(os.path.dirname(obj.kernel), 'boot.cfg')).read()
                 bootmodules = re.findall(r'modules=(.*)', realbootcfg)
                 for modules in bootmodules:
@@ -835,39 +888,33 @@ class TFTPGen:
         if not success:
             return results
 
-        # FIXME: img_path and local_img_path should probably be moved
-        #        up into the blender function to ensure they're consistently
-        #        available to templates across the board
+        # FIXME: img_path and local_img_path should probably be moved up into the blender function to ensure they're
+        #  consistently available to templates across the board.
         if blended["distro_name"]:
             blended['img_path'] = os.path.join("/images", blended["distro_name"])
-            blended['local_img_path'] = os.path.join(utils.tftpboot_location(), "images", blended["distro_name"])
+            blended['local_img_path'] = os.path.join(self.bootloc, "images", blended["distro_name"])
 
-        for template in templates.keys():
+        for template in list(templates.keys()):
             dest = templates[template]
             if dest is None:
                 continue
 
-            # Run the source and destination files through
-            # templar first to allow for variables in the path
+            # Run the source and destination files through templar first to allow for variables in the path
             template = self.templar.render(template, blended, None).strip()
             dest = os.path.normpath(self.templar.render(dest, blended, None).strip())
             # Get the path for the destination output
             dest_dir = os.path.normpath(os.path.dirname(dest))
 
-            # If we're looking for a single template, skip if this ones
-            # destination is not it.
+            # If we're looking for a single template, skip if this ones destination is not it.
             if path is not None and path != dest:
                 continue
 
-            # If we are writing output to a file, we allow files tobe
-            # written into the tftpboot directory, otherwise force all
-            # templated configs into the rendered directory to ensure that
-            # a user granted cobbler privileges via sudo can't overwrite
-            # arbitrary system files (This also makes cleanup easier).
+            # If we are writing output to a file, we allow files tobe written into the tftpboot directory, otherwise
+            # force all templated configs into the rendered directory to ensure that a user granted cobbler privileges
+            # via sudo can't overwrite arbitrary system files (This also makes cleanup easier).
             if os.path.isabs(dest_dir) and write_file:
-                if dest_dir.find(utils.tftpboot_location()) != 0:
-                    raise CX(" warning: template destination (%s) is outside %s, skipping." % (dest_dir, utils.tftpboot_location()))
-                    continue
+                if dest_dir.find(self.bootloc) != 0:
+                    raise CX(" warning: template destination (%s) is outside %s, skipping." % (dest_dir, self.bootloc))
             elif write_file:
                 dest_dir = os.path.join(self.settings.webdir, "rendered", dest_dir)
                 dest = os.path.join(dest_dir, os.path.basename(dest))
@@ -877,19 +924,14 @@ class TFTPGen:
             # Check for problems
             if not os.path.exists(template):
                 raise CX("template source %s does not exist" % template)
-                continue
             elif write_file and not os.path.isdir(dest_dir):
                 raise CX("template destination (%s) is invalid" % dest_dir)
-                continue
             elif write_file and os.path.exists(dest):
                 raise CX("template destination (%s) already exists" % dest)
-                continue
             elif write_file and os.path.isdir(dest):
                 raise CX("template destination (%s) is a directory" % dest)
-                continue
             elif template == "" or dest == "":
                 raise CX("either the template source or destination was blank (unknown variable used?)" % dest)
-                continue
 
             template_fh = open(template)
             template_data = template_fh.read()
@@ -907,6 +949,16 @@ class TFTPGen:
         return results
 
     def generate_gpxe(self, what, name):
+        """
+        Generate the gpxe files.
+
+        :param what: either "profile" or "system". All other item types not valdi.
+        :type what: str
+        :param name: The name of the profile or system.
+        :type name: str
+        :return: The rendered template.
+        :rtype: str
+        """
         if what.lower() not in ("profile", "system"):
             return "# gpxe is only valid for profiles and systems"
 
@@ -919,14 +971,11 @@ class TFTPGen:
             distro = obj.get_conceptual_parent().get_conceptual_parent()
             netboot_enabled = obj.netboot_enabled
 
-        # For multi-arch distros, the distro name in distro_mirror
-        # may not contain the arch string, so we need to figure out
-        # the path based on where the kernel is stored. We do this
-        # because some distros base future downloads on the initial
-        # URL passed in, so all of the files need to be at this location
-        # (which is why we can't use the images link, which just contains
-        # the kernel and initrd).
-        distro_mirror_name = string.join(distro.kernel.split('/')[-2:-1], '')
+        # For multi-arch distros, the distro name in distro_mirror may not contain the arch string, so we need to figure
+        # out the path based on where the kernel is stored. We do this because some distros base future downloads on the
+        # initial URL passed in, so all of the files need to be at this location (which is why we can't use the images
+        # link, which just contains the kernel and initrd).
+        distro_mirror_name = ''.join(distro.kernel.split('/')[-2:-1])
 
         blended = utils.blender(self.api, False, obj)
 
@@ -949,27 +998,37 @@ class TFTPGen:
 
         template = None
         if distro.breed in ['redhat', 'debian', 'ubuntu', 'suse']:
-            # all of these use a standard kernel/initrd setup so
-            # they all use the same gPXE template
-            template = os.path.join(self.settings.boot_loader_conf_template_dir, "gpxe_%s_linux.template" % what.lower())
+            # all of these use a standard kernel/initrd setup so they all use the same gPXE template
+            template = os.path.join(self.settings.boot_loader_conf_template_dir,
+                                    "gpxe_%s_linux.template" % what.lower())
         elif distro.breed == 'vmware':
             if distro.os_version == 'esx4':
                 # older ESX is pretty much RHEL, so it uses the standard kernel/initrd setup
-                template = os.path.join(self.settings.boot_loader_conf_template_dir, "gpxe_%s_linux.template" % what.lower())
+                template = os.path.join(self.settings.boot_loader_conf_template_dir,
+                                        "gpxe_%s_linux.template" % what.lower())
             elif distro.os_version == 'esxi4':
-                template = os.path.join(self.settings.boot_loader_conf_template_dir, "gpxe_%s_esxi4.template" % what.lower())
+                template = os.path.join(self.settings.boot_loader_conf_template_dir,
+                                        "gpxe_%s_esxi4.template" % what.lower())
             elif distro.os_version.startswith('esxi5'):
-                template = os.path.join(self.settings.boot_loader_conf_template_dir, "gpxe_%s_esxi5.template" % what.lower())
+                template = os.path.join(self.settings.boot_loader_conf_template_dir,
+                                        "gpxe_%s_esxi5.template" % what.lower())
             elif distro.os_version.startswith('esxi6'):
-                template = os.path.join(self.settings.boot_loader_conf_template_dir, "gpxe_%s_esxi6.template" % what.lower())
+                template = os.path.join(self.settings.boot_loader_conf_template_dir,
+                                        "gpxe_%s_esxi6.template" % what.lower())
+            elif distro.os_version.startswith('esxi7'):
+                template = os.path.join(self.settings.boot_loader_conf_template_dir,
+                                        "gpxe_%s_esxi7.template" % what.lower())
         elif distro.breed == 'freebsd':
-            template = os.path.join(self.settings.boot_loader_conf_template_dir, "gpxe_%s_freebsd.template" % what.lower())
+            template = os.path.join(self.settings.boot_loader_conf_template_dir,
+                                    "gpxe_%s_freebsd.template" % what.lower())
         elif distro.breed == 'windows':
-            template = os.path.join(self.settings.boot_loader_conf_template_dir, "gpxe_%s_windows.template" % what.lower())
+            template = os.path.join(self.settings.boot_loader_conf_template_dir,
+                                    "gpxe_%s_windows.template" % what.lower())
 
         if what == "system":
             if not netboot_enabled:
-                template = os.path.join(self.settings.boot_loader_conf_template_dir, "gpxe_%s_local.template" % what.lower())
+                template = os.path.join(self.settings.boot_loader_conf_template_dir,
+                                        "gpxe_%s_local.template" % what.lower())
 
         if not template:
             return "# unsupported breed/os version"
@@ -984,6 +1043,16 @@ class TFTPGen:
         return self.templar.render(template_data, blended, None)
 
     def generate_bootcfg(self, what, name):
+        """
+        Generate a bootcfg for a system of profile.
+
+        :param what: The type for what the bootcfg is generated for. Must be "profile" or "system".
+        :type what: str
+        :param name: The name of the item which the bootcfg should be generated for.
+        :type name: str
+        :return: The fully rendered bootcfg as a string.
+        :rtype: str
+        """
         if what.lower() not in ("profile", "system"):
             return "# bootcfg is only valid for profiles and systems"
 
@@ -995,14 +1064,11 @@ class TFTPGen:
             obj = self.api.find_system(name=name)
             distro = obj.get_conceptual_parent().get_conceptual_parent()
 
-        # For multi-arch distros, the distro name in distro_mirror
-        # may not contain the arch string, so we need to figure out
-        # the path based on where the kernel is stored. We do this
-        # because some distros base future downloads on the initial
-        # URL passed in, so all of the files need to be at this location
-        # (which is why we can't use the images link, which just contains
-        # the kernel and initrd).
-        distro_mirror_name = string.join(distro.kernel.split('/')[-2:-1], '')
+        # For multi-arch distros, the distro name in distro_mirror may not contain the arch string, so we need to figure
+        # out the path based on where the kernel is stored. We do this because some distros base future downloads on the
+        # initial URL passed in, so all of the files need to be at this location (which is why we can't use the images
+        # link, which just contains the kernel and initrd).
+        distro_mirror_name = ''.join(distro.kernel.split('/')[-2:-1])
 
         blended = utils.blender(self.api, False, obj)
 
@@ -1015,8 +1081,7 @@ class TFTPGen:
 
         blended['distro'] = distro_mirror_name
 
-        # FIXME: img_path should probably be moved up into the
-        #        blender function to ensure they're consistently
+        # FIXME: img_path should probably be moved up into the blender function to ensure they're consistently
         #        available to templates across the board
         if obj.enable_gpxe:
             blended['img_path'] = 'http://%s:%s/cobbler/links/%s' % (self.settings.server, self.settings.http_port, distro.name)
@@ -1034,6 +1099,17 @@ class TFTPGen:
         return self.templar.render(template_data, blended, None)
 
     def generate_script(self, what, objname, script_name):
+        """
+        Generate a script from a autoinstall script template for a given profile or system.
+
+        :param what: The type for what the bootcfg is generated for. Must be "profile" or "system".
+        :type what: str
+        :param objname: The name of the item which the bootcfg should be generated for.
+        :type objname: str
+        :param script_name: The name of the template which should be rendered for the system or profile.
+        :return: The fully rendered script as a string.
+        :rtype: str
+        """
         if what == "profile":
             obj = self.api.find_profile(name=objname)
         else:
@@ -1055,8 +1131,7 @@ class TFTPGen:
             pass
         blended.update(autoinstall_meta)      # make available at top level
 
-        # FIXME: img_path should probably be moved up into the
-        #        blender function to ensure they're consistently
+        # FIXME: img_path should probably be moved up into the blender function to ensure they're consistently
         #        available to templates across the board
         if obj.enable_gpxe:
             blended['img_path'] = 'http://%s:%s/cobbler/links/%s' % (self.settings.server, self.settings.http_port, distro.name)

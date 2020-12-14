@@ -1,27 +1,25 @@
+from builtins import str
 from django.http import HttpResponse
 from django.http import HttpResponseRedirect
-from django.shortcuts import render_to_response
-from django.template import RequestContext
-from django.template.loader import get_template
+from django.shortcuts import render
 from django.views.decorators.csrf import csrf_protect
 from django.views.decorators.http import require_POST
 
 import simplejson
-import string
 import time
-import xmlrpclib
+import xmlrpc.client
 
-import cobbler.item_distro as item_distro
-import cobbler.item_file as item_file
-import cobbler.item_image as item_image
-import cobbler.item_mgmtclass as item_mgmtclass
-import cobbler.item_package as item_package
-import cobbler.item_profile as item_profile
-import cobbler.item_repo as item_repo
-import cobbler.item_system as item_system
+import cobbler.items.distro as item_distro
+import cobbler.items.file as item_file
+import cobbler.items.image as item_image
+import cobbler.items.mgmtclass as item_mgmtclass
+import cobbler.items.package as item_package
+import cobbler.items.profile as item_profile
+import cobbler.items.repo as item_repo
+import cobbler.items.system as item_system
 import cobbler.settings as item_settings
 import cobbler.utils as utils
-import field_ui_info
+from cobbler.web import field_ui_info
 
 url_cobbler_api = None
 remote = None
@@ -32,16 +30,15 @@ username = None
 
 def index(request):
     """
-    This is the main greeting page for cobbler web.
+    This is the main greeting page for Cobbler web.
     """
     if not test_user_authenticated(request):
         return login(request, next="/cobbler_web", expired=True)
 
-    t = get_template('index.tmpl')
-    html = t.render(RequestContext(request, {
+    html = render(request, 'index.tmpl', {
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username,
-    }))
+    })
     return HttpResponse(html)
 
 # ========================================================================
@@ -53,11 +50,11 @@ def task_created(request):
     """
     if not test_user_authenticated(request):
         return login(request, next="/cobbler_web/task_created", expired=True)
-    t = get_template("task_created.tmpl")
-    html = t.render(RequestContext(request, {
+
+    html = render(request, "task_created.tmpl", {
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username
-    }))
+    })
     return HttpResponse(html)
 
 # ========================================================================
@@ -69,16 +66,17 @@ def error_page(request, message):
     """
     if not test_user_authenticated(request):
         return login(request, expired=True)
+
     # FIXME: test and make sure we use this rather than throwing lots of tracebacks for
     # field errors
-    t = get_template('error_page.tmpl')
     message = message.replace("<Fault 1: \"<class 'cobbler.cexceptions.CX'>:'", "Remote exception: ")
     message = message.replace("'\">", "")
-    html = t.render(RequestContext(request, {
+
+    html = render(request, 'error_page.tmpl', {
         'version': remote.extended_version(request.session['token'])['version'],
         'message': message,
         'username': username
-    }))
+    })
     return HttpResponse(html)
 
 # ==================================================================================
@@ -103,7 +101,7 @@ def _get_field_html_element(field_name):
 def get_fields(what, is_subobject, seed_item=None):
 
     """
-    Helper function.  Retrieves the field table from the cobbler objects
+    Helper function.  Retrieves the field table from the Cobbler objects
     and formats it in a way to make it useful for Django templating.
     The field structure indicates what fields to display and what the default
     values are, etc.
@@ -163,7 +161,7 @@ def get_fields(what, is_subobject, seed_item=None):
         # template logic
         ui_field["value_raw"] = ui_field["value"]
 
-        if isinstance(ui_field["value"], basestring) and ui_field["value"].startswith("SETTINGS:"):
+        if isinstance(ui_field["value"], str) and ui_field["value"].startswith("SETTINGS:"):
             key = ui_field["value"].replace("SETTINGS:", "", 1)
             ui_field["value"] = settings[key]
 
@@ -173,7 +171,7 @@ def get_fields(what, is_subobject, seed_item=None):
             if ui_field["name"] == "mgmt_parameters":
                 # Render dictionary as YAML for Management Parameters field
                 tokens = []
-                for (x, y) in ui_field["value"].items():
+                for (x, y) in list(ui_field["value"].items()):
                     if y is not None:
                         tokens.append("%s: %s" % (x, y))
                     else:
@@ -181,14 +179,14 @@ def get_fields(what, is_subobject, seed_item=None):
                 ui_field["value"] = "{ %s }" % ", ".join(tokens)
             else:
                 tokens = []
-                for (x, y) in ui_field["value"].items():
-                    if isinstance(y, basestring) and y.strip() != "~":
+                for (x, y) in list(ui_field["value"].items()):
+                    if isinstance(y, str) and y.strip() != "~":
                         y = y.replace(" ", "\\ ")
                         tokens.append("%s=%s" % (x, y))
                     elif isinstance(y, list):
-                        for l in y:
-                            l = l.replace(" ", "\\ ")
-                            tokens.append("%s=%s" % (x, l))
+                        for item in y:
+                            item = item.replace(" ", "\\ ")
+                            tokens.append("%s=%s" % (x, item))
                     elif y is not None:
                         tokens.append("%s" % x)
                 ui_field["value"] = " ".join(tokens)
@@ -199,7 +197,7 @@ def get_fields(what, is_subobject, seed_item=None):
         # flatten lists for those that aren't using select boxes
         if isinstance(ui_field["value"], list):
             if ui_field["html_element"] != "select":
-                ui_field["value"] = string.join(ui_field["value"], sep=" ")
+                ui_field["value"] = " ".join(ui_field["value"])
 
         ui_fields.append(ui_field)
 
@@ -255,7 +253,7 @@ def _create_sections_metadata(what, sections_data, fields):
     sections = {}
     section_index = 0
     for section_data in sections_data:
-        for section_name, section_fields in section_data.items():
+        for section_name, section_fields in list(section_data.items()):
             skey = "%d_%s" % (section_index, section_name)
             sections[skey] = {}
             sections[skey]['name'] = section_name
@@ -382,7 +380,7 @@ def genlist(request, what, page=None):
     if what == "system":
         # FIXME: also list network, once working
         columns = ["name", "profile", "status", "netboot_enabled"]
-        profiles = sorted(remote.get_profiles())
+        profiles = sorted(remote.get_profiles(), key=lambda x: x['name'])
         batchactions += [
             ["Power on", "power", "on"],
             ["Power off", "power", "off"],
@@ -409,8 +407,7 @@ def genlist(request, what, page=None):
         columns = ["name"]
 
     # render the list
-    t = get_template('generic_list.tmpl')
-    html = t.render(RequestContext(request, {
+    html = render(request, 'generic_list.tmpl', {
         'what': what,
         'columns': __format_columns(columns, sort_field),
         'items': __format_items(pageditems["items"], columns),
@@ -421,7 +418,7 @@ def genlist(request, what, page=None):
         'limit': limit,
         'batchactions': batchactions,
         'profiles': profiles,
-    }))
+    })
     return HttpResponse(html)
 
 
@@ -560,7 +557,7 @@ def generic_delete(request, what, obj_name=None):
         recursive = simplejson.loads(request.POST.get("recursive", "false"))
         try:
             remote.xapi_object_edit(what, obj_name, "remove", {'name': obj_name, 'recursive': recursive}, request.session['token'])
-        except Exception, e:
+        except Exception as e:
             return error_page(request, str(e))
         return HttpResponseRedirect("/cobbler_web/%s/list" % what)
 
@@ -588,7 +585,7 @@ def generic_domulti(request, what, multi_mode=None, multi_arg=None):
         for obj_name in names:
             try:
                 remote.xapi_object_edit(what, obj_name, "remove", {'name': obj_name, 'recursive': recursive}, request.session['token'])
-            except Exception, e:
+            except Exception as e:
                 return error_page(request, str(e))
 
     elif what == "system" and multi_mode == "netboot":
@@ -652,11 +649,11 @@ def generic_domulti(request, what, multi_mode=None, multi_arg=None):
 def import_prompt(request):
     if not test_user_authenticated(request):
         return login(request, next="/cobbler_web/import/prompt", expired=True)
-    t = get_template('import.tmpl')
-    html = t.render(RequestContext(request, {
+
+    html = render(request, 'import.tmpl', {
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username,
-    }))
+    })
     return HttpResponse(html)
 
 # ======================================================================
@@ -668,13 +665,14 @@ def check(request):
     """
     if not test_user_authenticated(request):
         return login(request, next="/cobbler_web/check", expired=True)
+
     results = remote.check(request.session['token'])
-    t = get_template('check.tmpl')
-    html = t.render(RequestContext(request, {
+
+    html = render(request, 'check.tmpl', {
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username,
         'results': results
-    }))
+    })
     return HttpResponse(html)
 
 # ======================================================================
@@ -721,14 +719,13 @@ def aifile_list(request, page=None):
     for aifile in aifiles:
         aifile_list.append((aifile, 'editable'))
 
-    t = get_template('aifile_list.tmpl')
-    html = t.render(RequestContext(request, {
+    html = render(request, 'aifile_list.tmpl', {
         'what': 'aifile',
         'ai_files': aifile_list,
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username,
         'item_count': len(aifile_list[0]),
-    }))
+    })
     return HttpResponse(html)
 
 # ======================================================================
@@ -752,8 +749,7 @@ def aifile_edit(request, aifile_name=None, editmode='edit'):
         deleteable = not remote.is_autoinstall_in_use(aifile_name, request.session['token'])
         aidata = remote.read_autoinstall_template(aifile_name, request.session['token'])
 
-    t = get_template('aifile_edit.tmpl')
-    html = t.render(RequestContext(request, {
+    html = render(request, 'aifile_edit.tmpl', {
         'aifile_name': aifile_name,
         'deleteable': deleteable,
         'aidata': aidata,
@@ -761,7 +757,7 @@ def aifile_edit(request, aifile_name=None, editmode='edit'):
         'editmode': editmode,
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username
-    }))
+    })
     return HttpResponse(html)
 
 # ======================================================================
@@ -808,13 +804,12 @@ def snippet_list(request, page=None):
     for snippet in snippets:
         snippet_list.append((snippet, 'editable'))
 
-    t = get_template('snippet_list.tmpl')
-    html = t.render(RequestContext(request, {
+    html = render(request, 'snippet_list.tmpl', {
         'what': 'snippet',
         'snippets': snippet_list,
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username
-    }))
+    })
     return HttpResponse(html)
 
 # ======================================================================
@@ -838,8 +833,7 @@ def snippet_edit(request, snippet_name=None, editmode='edit'):
         deleteable = True
         snippetdata = remote.read_autoinstall_snippet(snippet_name, request.session['token'])
 
-    t = get_template('snippet_edit.tmpl')
-    html = t.render(RequestContext(request, {
+    html = render(request, 'snippet_edit.tmpl', {
         'snippet_name': snippet_name,
         'deleteable': deleteable,
         'snippetdata': snippetdata,
@@ -847,7 +841,7 @@ def snippet_edit(request, snippet_name=None, editmode='edit'):
         'editmode': editmode,
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username
-    }))
+    })
     return HttpResponse(html)
 
 # ======================================================================
@@ -894,19 +888,18 @@ def setting_list(request):
     if not test_user_authenticated(request):
         return login(request, next="/cobbler_web/setting/list", expired=True)
     settings = remote.get_settings()
-    skeys = settings.keys()
+    skeys = list(settings.keys())
     skeys.sort()
 
     results = []
     for k in skeys:
         results.append([k, settings[k]])
 
-    t = get_template('settings.tmpl')
-    html = t.render(RequestContext(request, {
+    html = render(request, 'settings.tmpl', {
         'settings': results,
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username,
-    }))
+    })
     return HttpResponse(html)
 
 
@@ -932,8 +925,7 @@ def setting_edit(request, setting_name=None):
     sections_data = field_ui_info.SETTING_UI_FIELDS_MAPPING
     sections = _create_sections_metadata('setting', sections_data, fields)
 
-    t = get_template('generic_edit.tmpl')
-    html = t.render(RequestContext(request, {
+    html = render(request, 'generic_edit.tmpl', {
         'what': 'setting',
         'sections': sections,
         'subobject': False,
@@ -942,7 +934,7 @@ def setting_edit(request, setting_name=None):
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username,
         'name': setting_name,
-    }))
+    })
     return HttpResponse(html)
 
 
@@ -979,20 +971,17 @@ def events(request):
     events = remote.get_events()
 
     events2 = []
-    for id in events.keys():
+    for id in list(events.keys()):
         (ttime, name, state, read_by) = events[id]
         events2.append([id, time.asctime(time.localtime(ttime)), name, state])
 
-    def sorter(a, b):
-        return cmp(a[0], b[0])
-    events2.sort(sorter)
+    events2 = sorted(events2)
 
-    t = get_template('events.tmpl')
-    html = t.render(RequestContext(request, {
+    html = render(request, 'events.tmpl', {
         'results': events2,
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username
-    }))
+    })
     return HttpResponse(html)
 
 # ======================================================================
@@ -1014,8 +1003,7 @@ def eventlog(request, event=0):
     eventstate = data[2]
     eventlog = remote.get_event_log(event)
 
-    t = get_template('eventlog.tmpl')
-    vars = {
+    html = render(request, 'eventlog.tmpl', {
         'eventlog': eventlog,
         'eventname': eventname,
         'eventstate': eventstate,
@@ -1023,8 +1011,7 @@ def eventlog(request, event=0):
         'eventtime': eventtime,
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username
-    }
-    html = t.render(RequestContext(request, vars))
+    })
     return HttpResponse(html)
 
 # ======================================================================
@@ -1089,7 +1076,7 @@ def hardlink(request):
 @csrf_protect
 def replicate(request):
     """
-    Replicate configuration from the central cobbler server, configured
+    Replicate configuration from the central Cobbler server, configured
     in /etc/cobbler/settings (note: this is uni-directional!)
 
     FIXME: this is disabled because we really need a web page to provide options for
@@ -1221,10 +1208,10 @@ def generic_edit(request, what=None, obj_name=None, editmode="new"):
         sections_data = field_ui_info.SYSTEM_UI_FIELDS_MAPPING
     sections = _create_sections_metadata(what, sections_data, fields)
 
-    t = get_template('generic_edit.tmpl')
-    inames = interfaces.keys()
+    inames = list(interfaces.keys())
     inames.sort()
-    html = t.render(RequestContext(request, {
+
+    html = render(request, 'generic_edit.tmpl', {
         'what': what,
         'sections': sections,
         'subobject': child,
@@ -1236,8 +1223,7 @@ def generic_edit(request, what=None, obj_name=None, editmode="new"):
         'version': remote.extended_version(request.session['token'])['version'],
         'username': username,
         'name': obj_name
-    }))
-
+    })
     return HttpResponse(html)
 
 # ======================================================================
@@ -1247,7 +1233,7 @@ def generic_edit(request, what=None, obj_name=None, editmode="new"):
 @csrf_protect
 def generic_save(request, what):
     """
-    Saves an object back using the cobbler API after clearing any 'generic_edit' page.
+    Saves an object back using the Cobbler API after clearing any 'generic_edit' page.
     """
     if not test_user_authenticated(request):
         return login(request, next="/cobbler_web/%s/list" % what, expired=True)
@@ -1331,11 +1317,11 @@ def generic_save(request, what):
                 if value is not None and (not subobject or field['name'] != 'distro') and value != prev_value:
                     try:
                         remote.modify_item(what, obj_id, field['name'], value, request.session['token'])
-                    except Exception, e:
+                    except Exception as e:
                         return error_page(request, str(e))
 
     # special handling for system interface fields
-    # which are the only objects in cobbler that will ever work this way
+    # which are the only objects in Cobbler that will ever work this way
     if what == "system":
         network_interface_fields = get_network_interface_fields()
         interfaces = request.POST.get('interface_list', "").split(",")
@@ -1354,12 +1340,12 @@ def generic_save(request, what):
                     remote.modify_system(obj_id, 'delete_interface', interface, request.session['token'])
                 elif present == "1":
                     remote.modify_system(obj_id, 'modify_interface', ifdata, request.session['token'])
-            except Exception, e:
+            except Exception as e:
                 return error_page(request, str(e))
 
     try:
         remote.save_item(what, obj_id, request.session['token'], editmode)
-    except Exception, e:
+    except Exception as e:
         return error_page(request, str(e))
 
     return HttpResponseRedirect('/cobbler_web/%s/list' % what)
@@ -1376,7 +1362,7 @@ def test_user_authenticated(request):
     if url_cobbler_api is None:
         url_cobbler_api = utils.local_get_cobbler_api_url()
 
-    remote = xmlrpclib.Server(url_cobbler_api, allow_none=True)
+    remote = xmlrpc.client.Server(url_cobbler_api, allow_none=True)
 
     # if we have a token, get the associated username from
     # the remote server via XMLRPC. We then compare that to
@@ -1404,14 +1390,14 @@ def login(request, next=None, message=None, expired=False):
     if use_passthru < 0:
         token = remote.login("", utils.get_shared_secret())
         auth_module = remote.get_authn_module_name(token)
-        use_passthru = auth_module == 'authn_passthru'
+        use_passthru = auth_module == 'authentication.passthru'
 
     if use_passthru:
         return accept_remote_user(request, next)
 
     if expired and not message:
         message = "Sorry, either you need to login or your session expired."
-    return render_to_response('login.tmpl', RequestContext(request, {'next': next, 'message': message}))
+    return render(request, 'login.tmpl', {'next': next, 'message': message})
 
 
 def accept_remote_user(request, nextsite):
@@ -1442,7 +1428,7 @@ def do_login(request):
     if url_cobbler_api is None:
         url_cobbler_api = utils.local_get_cobbler_api_url()
 
-    remote = xmlrpclib.Server(url_cobbler_api, allow_none=True)
+    remote = xmlrpc.client.Server(url_cobbler_api, allow_none=True)
 
     try:
         token = remote.login(username, password)

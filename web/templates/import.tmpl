@@ -32,13 +32,14 @@
         <option value="debian">Debian</option>
         <option value="ubuntu">Ubuntu</option>
         <option value="suse">SUSE</option>
+        <option value="vmware">VMware</option>
       </select>
       <span class="context-tip">Type of OS you are importing.  If yours is not listed here (ex: SUSE), you will have to add a distro manually.  Other distro imports may be supported in the future.  Non Red Hat based distros may require additional instructions, see the <a href="https://github.com/cobbler/cobbler/wiki">Wiki</a> for details.</span>
     </li>
     <li class="editrow">
       <label for="path" class="inputlabel">Path</label>
       <input type="text" size="128" name="path" id="path" />
-      <span class="context-tip">Full path to mounted DVD contents only (ex: /mnt/cdrom).  No CD ISOs!.  Content will be copied by Cobbler to /var/www/cobbler/ks_mirror automatically and then cobbler will create distro and profile objects for each ISO imported.  If you need more control about where files are sourced or end up, create new distro and profile object manually.</span>
+      <span class="context-tip">Full path to mounted DVD contents only (ex: /mnt/cdrom).  No CD ISOs!.  Content will be copied by Cobbler to /var/www/cobbler/distro_mirror automatically and then cobbler will create distro and profile objects for each ISO imported.  If you need more control about where files are sourced or end up, create new distro and profile object manually.</span>
     </li>
     <li class="editrow">
       <input class="button" type="submit" name="submit" value="Run" />
