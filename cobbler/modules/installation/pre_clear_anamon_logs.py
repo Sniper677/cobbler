@@ -19,58 +19,56 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-from builtins import str
 import glob
+import logging
 import os
 
+from cobbler import utils
 from cobbler.cexceptions import CX
 
 
-def register():
-    """
-        This pure python trigger acts as if it were a legacy shell-trigger, but is much faster. The return of this method
-        indicates the trigger type.
+PATH_PREFIX = "/var/log/cobbler/anamon/"
 
-        :return: Always: "/var/lib/cobbler/triggers/install/pre/\*"
-        :rtype: str
-        """
+logger = logging.getLogger()
+
+
+def register() -> str:
+    """
+    This pure python trigger acts as if it were a legacy shell-trigger, but is much faster. The return of this method
+    indicates the trigger type.
+
+    :return: Always ``/var/lib/cobbler/triggers/install/pre/*``
+    """
     return "/var/lib/cobbler/triggers/install/pre/*"
 
 
-def run(api, args, logger):
+def run(api, args) -> int:
     """
     The list of args should have one element:
         - 1: the name of the system or profile
 
     :param api: The api to resolve metadata with.
     :param args: This should be a list as described above.
-    :param logger: This parameter is unused currently.
     :return: "0" on success.
+    :raises CX: Raised in case of missing arguments.
     """
-
-    # FIXME: use the logger
-
     if len(args) < 3:
         raise CX("invalid invocation")
 
     name = args[1]
 
     settings = api.settings()
-    anamon_enabled = str(settings.anamon_enabled)
 
     # Remove any files matched with the given glob pattern
     def unlink_files(globex):
         for f in glob.glob(globex):
             if os.path.isfile(f):
-                try:
-                    os.unlink(f)
-                except OSError:
-                    pass
+                utils.rmfile(f)
 
-    if str(anamon_enabled) in ["true", "1", "y", "yes"]:
-        dirname = "/var/log/cobbler/anamon/%s" % name
+    if settings.anamon_enabled:
+        dirname = os.path.join(PATH_PREFIX, name)
         if os.path.isdir(dirname):
             unlink_files(os.path.join(dirname, "*"))
 
-    # TODO - log somewhere that we cleared a systems anamon logs
+    logger.info('Cleared Anamon logs for "%s".', name)
     return 0

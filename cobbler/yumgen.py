@@ -21,41 +21,31 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-
-from builtins import object
-import os
-import os.path
+import pathlib
 
 from cobbler import templar
 from cobbler import utils
 
 
-class YumGen(object):
+class YumGen:
 
-    def __init__(self, collection_mgr):
+    def __init__(self, api):
         """
         Constructor
 
-        :param collection_mgr: The main collection manager instance which is used by the current running server.
+        :param api: The main API instance which is used by the current running server.
         """
-        self.collection_mgr = collection_mgr
-        self.api = collection_mgr.api
-        self.distros = collection_mgr.distros()
-        self.profiles = collection_mgr.profiles()
-        self.systems = collection_mgr.systems()
-        self.settings = collection_mgr.settings()
-        self.repos = collection_mgr.repos()
-        self.templar = templar.Templar(collection_mgr)
+        self.api = api
+        self.settings = api.settings()
+        self.templar = templar.Templar(self.api)
 
-    def get_yum_config(self, obj, is_profile):
+    def get_yum_config(self, obj, is_profile: bool) -> str:
         """
         Return one large yum repo config blob suitable for use by any target system that requests it.
 
         :param obj: The object to generate the yumconfig for.
         :param is_profile: If the requested object is a profile. (Parameter not used currently)
-        :type is_profile: bool
         :return: The generated yumconfig or the errors.
-        :rtype: str
         """
 
         totalbuf = ""
@@ -69,13 +59,13 @@ class YumGen(object):
 
         included = {}
         for r in blended["source_repos"]:
-            filename = self.settings.webdir + "/" + "/".join(r[0].split("/")[4:])
+            filename = pathlib.Path(self.settings.webdir).joinpath("/", "/".join(r[0].split("/")[4:]))
             if filename not in included:
                 input_files.append(filename)
             included[filename] = 1
 
         for repo in blended["repos"]:
-            path = os.path.join(self.settings.webdir, "repo_mirror", repo, "config.repo")
+            path = pathlib.Path(self.settings.webdir).joinpath("repo_mirror", repo, "config.repo")
             if path not in included:
                 input_files.append(path)
             included[path] = 1
@@ -92,7 +82,7 @@ class YumGen(object):
             infile_data = infile_h.read()
             infile_h.close()
             outfile = None  # disk output only
-            totalbuf += self.templar.render(infile_data, blended, outfile, None)
+            totalbuf += self.templar.render(infile_data, blended, outfile)
             totalbuf += "\n\n"
 
         return totalbuf

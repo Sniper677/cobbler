@@ -21,37 +21,35 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-from builtins import str
-from builtins import object
 import fnmatch
+import logging
 import os
 import xmlrpc.client
+from typing import Optional
 
-from cobbler import clogger
 from cobbler import utils
 
 OBJ_TYPES = ["distro", "profile", "system", "repo", "image", "mgmtclass", "package", "file"]
 
 
-class Replicate(object):
+class Replicate:
+    """
+    This class contains the magic to replicate a Cobbler instance to another Cobbler instance.
+    """
 
-    def __init__(self, collection_mgr, logger=None):
+    def __init__(self, api):
         """
         Constructor
 
-        :param collection_mgr: The collection manager which holds all information available in Cobbler.
-        :param logger: The logger to audit all action with.
+        :param api: The API which holds all information available in Cobbler.
         """
-        self.collection_mgr = collection_mgr
-        self.settings = collection_mgr.settings()
-        self.api = collection_mgr.api
+        self.settings = api.settings()
+        self.api = api
         self.remote = None
         self.uri = None
-        if logger is None:
-            logger = clogger.Logger()
-        self.logger = logger
+        self.logger = logging.getLogger()
 
-    def rsync_it(self, from_path, to_path, type=None):
+    def rsync_it(self, from_path, to_path, type: Optional[str] = None):
         """
         Rsync from a source to a destination with the rsync options Cobbler was configured with.
 
@@ -65,7 +63,7 @@ class Replicate(object):
         else:
             cmd = "rsync %s %s %s" % (self.settings.replicate_rsync_options, from_path, to_path)
 
-        rc = utils.subprocess_call(self.logger, cmd, shell=True)
+        rc = utils.subprocess_call(cmd, shell=True)
         if rc != 0:
             self.logger.info("rsync failed")
 
@@ -84,9 +82,9 @@ class Replicate(object):
             if luid not in remotes:
                 try:
                     self.logger.info("removing %s %s" % (obj_type, ldata["name"]))
-                    self.api.remove_item(obj_type, ldata["name"], recursive=True, logger=self.logger)
+                    self.api.remove_item(obj_type, ldata["name"], recursive=True)
                 except Exception:
-                    utils.log_exc(self.logger)
+                    utils.log_exc()
 
     # -------------------------------------------------------
 
@@ -108,13 +106,13 @@ class Replicate(object):
             if not rdata["uid"] in locals:
                 creator = getattr(self.api, "new_%s" % obj_type)
                 newobj = creator()
-                newobj.from_dict(rdata)
+                newobj.from_dict(utils.revert_strip_none(rdata))
                 try:
                     self.logger.info("adding %s %s" % (obj_type, rdata["name"]))
-                    if not self.api.add_item(obj_type, newobj, logger=self.logger):
+                    if not self.api.add_item(obj_type, newobj):
                         self.logger.error("failed to add %s %s" % (obj_type, rdata["name"]))
                 except Exception:
-                    utils.log_exc(self.logger)
+                    utils.log_exc()
 
     # -------------------------------------------------------
 
@@ -138,16 +136,16 @@ class Replicate(object):
 
                     if ldata["name"] != rdata["name"]:
                         self.logger.info("removing %s %s" % (obj_type, ldata["name"]))
-                        self.api.remove_item(obj_type, ldata["name"], recursive=True, logger=self.logger)
+                        self.api.remove_item(obj_type, ldata["name"], recursive=True)
                     creator = getattr(self.api, "new_%s" % obj_type)
                     newobj = creator()
-                    newobj.from_dict(rdata)
+                    newobj.from_dict(utils.revert_strip_none(rdata))
                     try:
                         self.logger.info("updating %s %s" % (obj_type, rdata["name"]))
                         if not self.api.add_item(obj_type, newobj):
                             self.logger.error("failed to update %s %s" % (obj_type, rdata["name"]))
                     except Exception:
-                        utils.log_exc(self.logger)
+                        utils.log_exc()
 
     # -------------------------------------------------------
 
@@ -197,7 +195,8 @@ class Replicate(object):
                             self.logger.error("Failed to rsync distro %s" % distro)
                             continue
                     else:
-                        self.logger.warning("Skipping distro %s, as it doesn't appear to live under distro_mirror" % distro)
+                        self.logger.warning("Skipping distro %s, as it doesn't appear to live under distro_mirror"
+                                            % distro)
 
             self.logger.info("Rsyncing repos")
             for repo in list(self.must_include["repo"].keys()):
@@ -207,8 +206,8 @@ class Replicate(object):
             self.logger.info("Rsyncing distro repo configs")
             self.rsync_it("cobbler-distros/config/", os.path.join(self.settings.webdir, "distro_mirror", "config"))
             self.logger.info("Rsyncing automatic installation templates & snippets")
-            self.rsync_it("cobbler-autoinstalls", "/var/lib/cobbler/autoinstall_templates")
-            self.rsync_it("cobbler-snippets", "/var/lib/cobbler/autoinstall_snippets")
+            self.rsync_it("cobbler-templates", self.settings.autoinstall_templates_dir)
+            self.rsync_it("cobbler-snippets", self.settings.autoinstall_snippets_dir)
             self.logger.info("Rsyncing triggers")
             self.rsync_it("cobbler-triggers", "/var/lib/cobbler/triggers")
             self.logger.info("Rsyncing scripts")
@@ -216,7 +215,7 @@ class Replicate(object):
         else:
             self.logger.info("*NOT* Rsyncing Data")
 
-        self.logger.info("Removing Objects Not Stored On Local")
+        self.logger.info("Adding Objects Not Stored On Local")
         for what in OBJ_TYPES:
             self.add_objects_not_on_local(what)
 
@@ -322,15 +321,12 @@ class Replicate(object):
                     self.logger.debug("Adding image %s for system %s." % (img, sys))
                     self.must_include["image"][img] = 1
 
-        # FIXME: remove debug
-        for ot in OBJ_TYPES:
-            self.logger.debug("transfer list for %s is %s" % (ot, list(self.must_include[ot].keys())))
-
     # -------------------------------------------------------
 
-    def run(self, cobbler_master=None, port="80", distro_patterns=None, profile_patterns=None, system_patterns=None,
-            repo_patterns=None, image_patterns=None, mgmtclass_patterns=None, package_patterns=None, file_patterns=None,
-            prune=False, omit_data=False, sync_all=False, use_ssl=False):
+    def run(self, cobbler_master=None, port: str = "80", distro_patterns=None, profile_patterns=None,
+            system_patterns=None, repo_patterns=None, image_patterns=None, mgmtclass_patterns=None,
+            package_patterns=None, file_patterns=None, prune: bool = False, omit_data=False, sync_all: bool = False,
+            use_ssl: bool = False):
         """
         Get remote profiles and distros and sync them locally
 
@@ -374,7 +370,7 @@ class Replicate(object):
         elif len(self.settings.cobbler_master) > 0:
             self.master = self.settings.cobbler_master
         else:
-            utils.die(self.logger, 'No Cobbler master specified, try --master.')
+            utils.die('No Cobbler master specified, try --master.')
 
         self.uri = '%s://%s:%s/cobbler_api' % (protocol, self.master, self.port)
 
@@ -403,5 +399,5 @@ class Replicate(object):
         self.replicate_data()
         self.link_distros()
         self.logger.info("Syncing")
-        self.api.sync(logger=self.logger)
+        self.api.sync()
         self.logger.info("Done")

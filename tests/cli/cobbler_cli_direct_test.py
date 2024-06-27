@@ -72,6 +72,30 @@ class TestCobblerCliTestDirect:
         lines = outputstd.split("\n")
         assert "*** TASK COMPLETE ***" == get_last_line(lines)
 
+    def test_cobbler_sync_dns(self, run_cmd, get_last_line):
+        """Runs 'cobbler sync --dns'"""
+        (outputstd, outputerr) = run_cmd(cmd=["sync", "--dns"])
+        lines = outputstd.split("\n")
+        assert "*** TASK COMPLETE ***" == get_last_line(lines)
+
+    def test_cobbler_sync_dhcp(self, run_cmd, get_last_line):
+        """Runs 'cobbler sync --dhcp'"""
+        (outputstd, outputerr) = run_cmd(cmd=["sync", "--dhcp"])
+        lines = outputstd.split("\n")
+        assert "*** TASK COMPLETE ***" == get_last_line(lines)
+
+    def test_cobbler_sync_dhcp_dns(self, run_cmd, get_last_line):
+        """Runs 'cobbler sync --dhcp --dns'"""
+        (outputstd, outputerr) = run_cmd(cmd=["sync", "--dhcp", "--dns"])
+        lines = outputstd.split("\n")
+        assert "*** TASK COMPLETE ***" == get_last_line(lines)
+
+    def test_cobbler_sync_systems(self, run_cmd, get_last_line):
+        """Runs 'cobbler sync'"""
+        (outputstd, outputerr) = run_cmd(cmd=["sync", "--systems=a.b.c,a.d.c"])
+        lines = outputstd.split("\n")
+        assert "*** TASK COMPLETE ***" == get_last_line(lines)
+
     def test_cobbler_signature_report(self, run_cmd, get_last_line):
         """Runs 'cobbler signature report'"""
         (outputstd, outputerr) = run_cmd(cmd=["signature", "report"])
@@ -134,6 +158,7 @@ class TestCobblerCliTestDirect:
         i = assert_list_section(lines, i, "mgmtclasses")
         i = assert_list_section(lines, i, "packages")
         i = assert_list_section(lines, i, "files")
+        i = assert_list_section(lines, i, "menus")
 
     def test_cobbler_report(self, run_cmd, assert_report_section):
         (outputstd, outputerr) = run_cmd(cmd=["report"])
@@ -147,11 +172,7 @@ class TestCobblerCliTestDirect:
         i = assert_report_section(lines, i, "mgmtclasses")
         i = assert_report_section(lines, i, "packages")
         i = assert_report_section(lines, i, "files")
-
-    def test_cobbler_getloaders(self, run_cmd, get_last_line):
-        (outputstd, outputerr) = run_cmd(cmd=["get-loaders"])
-        lines = outputstd.split("\n")
-        assert "*** TASK COMPLETE ***" == get_last_line(lines)
+        i = assert_report_section(lines, i, "menus")
 
     def test_cobbler_hardlink(self, run_cmd, get_last_line):
         (outputstd, outputerr) = run_cmd(cmd=["hardlink"])

@@ -20,28 +20,23 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 """
 
 
-from builtins import str
 import traceback
 
-# We'll import this just a bit later to keep it from being a requirement
-# import ldap
-
-import cobbler.api as cobbler_api
 from cobbler.cexceptions import CX
+from cobbler import enums
 
 
-def register():
+def register() -> str:
     """
     The mandatory Cobbler module registration hook.
 
     :return: Always "authn"
-    :rtype: str
     """
 
     return "authn"
 
 
-def authenticate(api_handle, username, password):
+def authenticate(api_handle, username, password) -> bool:
     """
     Validate an LDAP bind, returning whether the authentication was successful or not.
 
@@ -49,6 +44,7 @@ def authenticate(api_handle, username, password):
     :param username: The username to authenticate.
     :param password: The password to authenticate.
     :return: True if the ldap server authentication was a success, otherwise false.
+    :raises CX: Raised in case the LDAP search bind credentials are missing in the settings.
     """
 
     if not password:
@@ -58,14 +54,16 @@ def authenticate(api_handle, username, password):
     server = api_handle.settings().ldap_server
     basedn = api_handle.settings().ldap_base_dn
     port = str(api_handle.settings().ldap_port)
-    tls = api_handle.settings().ldap_tls
-    anon_bind = api_handle.settings().ldap_anonymous_bind
     prefix = api_handle.settings().ldap_search_prefix
 
     # Support for LDAP client certificates
+    tls = api_handle.settings().ldap_tls
+    tls_cacertdir = api_handle.settings().ldap_tls_cacertfile
     tls_cacertfile = api_handle.settings().ldap_tls_cacertfile
     tls_keyfile = api_handle.settings().ldap_tls_keyfile
     tls_certfile = api_handle.settings().ldap_tls_certfile
+    tls_cipher_suite = api_handle.settings().ldap_tls_cipher_suite
+    tls_reqcert = api_handle.settings().ldap_tls_reqcert
 
     # allow multiple servers split by a space
     if server.find(" "):
@@ -75,13 +73,6 @@ def authenticate(api_handle, username, password):
 
     # to get ldap working with Active Directory
     ldap.set_option(ldap.OPT_REFERRALS, 0)
-    
-    if tls_cacertfile:
-        ldap.set_option(ldap.OPT_X_TLS_CACERTFILE, tls_cacertfile)
-    if tls_keyfile:
-        ldap.set_option(ldap.OPT_X_TLS_KEYFILE, tls_keyfile)
-    if tls_certfile:
-        ldap.set_option(ldap.OPT_X_TLS_CERTFILE, tls_certfile)
 
     uri = ""
     for server in servers:
@@ -90,6 +81,8 @@ def authenticate(api_handle, username, password):
             uri += 'ldap://' + server
         elif port == '636':
             uri += 'ldaps://' + server
+        elif port == '3269':
+            uri += 'ldaps://' + "%s:%s" % (server, port)
         else:
             uri += 'ldap://' + "%s:%s" % (server, port)
         uri += ' '
@@ -99,19 +92,44 @@ def authenticate(api_handle, username, password):
     # connect to LDAP host
     dir = ldap.initialize(uri)
 
+    if port in ('636', '3269'):
+        ldaps_tls = ldap
+    else:
+        ldaps_tls = dir
+
+    if tls or port in ('636', '3269'):
+        if tls_cacertdir:
+            ldaps_tls.set_option(ldap.OPT_X_TLS_CACERTDIR, tls_cacertdir)
+        if tls_cacertfile:
+            ldaps_tls.set_option(ldap.OPT_X_TLS_CACERTFILE, tls_cacertfile)
+        if tls_keyfile:
+            ldaps_tls.set_option(ldap.OPT_X_TLS_KEYFILE, tls_keyfile)
+        if tls_certfile:
+            ldaps_tls.set_option(ldap.OPT_X_TLS_CERTFILE, tls_certfile)
+        if tls_reqcert:
+            req_cert = enums.TlsRequireCert.to_enum(tls_reqcert)
+            reqcert_types = {enums.TlsRequireCert.NEVER: ldap.OPT_X_TLS_NEVER,
+                             enums.TlsRequireCert.ALLOW: ldap.OPT_X_TLS_ALLOW,
+                             enums.TlsRequireCert.DEMAND: ldap.OPT_X_TLS_DEMAND,
+                             enums.TlsRequireCert.HARD: ldap.OPT_X_TLS_HARD}
+            ldaps_tls.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, reqcert_types[req_cert])
+        if tls_cipher_suite:
+            ldaps_tls.set_option(ldap.OPT_X_TLS_CIPHER_SUITE, tls_cipher_suite)
+
     # start_tls if tls is 'on', 'true' or 'yes' and we're not already using old-SSL
-    tls = str(tls).lower()
-    if port != '636':
-        if tls in ["on", "true", "yes", "1"]:
+    if port not in ('636', '3269'):
+        if tls:
             try:
+                dir.set_option(ldap.OPT_X_TLS_NEWCTX, 0)
                 dir.start_tls_s()
             except:
                 traceback.print_exc()
                 return False
+    else:
+        ldap.set_option(ldap.OPT_X_TLS_NEWCTX, 0)
 
     # if we're not allowed to search anonymously, grok the search bind settings and attempt to bind
-    anon_bind = str(anon_bind).lower()
-    if anon_bind not in ["on", "true", "yes", "1"]:
+    if not api_handle.settings().ldap_anonymous_bind:
         searchdn = api_handle.settings().ldap_search_bind_dn
         searchpw = api_handle.settings().ldap_search_passwd
 
@@ -143,10 +161,3 @@ def authenticate(api_handle, username, password):
     except:
         # traceback.print_exc()
         return False
-    # catch-all
-    return False
-
-
-if __name__ == "__main__":
-    api_handle = cobbler_api.CobblerAPI()
-    print((authenticate(api_handle, "guest", "guest")))

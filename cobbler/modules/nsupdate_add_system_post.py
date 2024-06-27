@@ -10,7 +10,6 @@
 #   - python-dnspython (Debian)
 #   - python-dns (RH/CentOS)
 
-from builtins import str
 import dns.query
 import dns.tsigkeyring
 import dns.update
@@ -32,12 +31,11 @@ def nslog(msg):
         logf.write(msg)
 
 
-def register():
+def register() -> str:
     """
     This method is the obligatory Cobbler registration hook.
 
     :return: The trigger name or an empty string.
-    :rtype: str
     """
     if __name__ == "cobbler.modules.nsupdate_add_system_post":
         return "/var/lib/cobbler/triggers/add/system/post/*"
@@ -47,13 +45,12 @@ def register():
         return ''
 
 
-def run(api, args, logger):
+def run(api, args):
     """
     This method executes the trigger, meaning in this case that it updates the dns configuration.
 
     :param api: The api to read metadata from.
     :param args: Metadata to log.
-    :param logger: The logger to audit the action with.
     :return: "0" on success or a skipped task. If the task failed or problems occurred then an exception is raised.
     """
     global logf
@@ -68,7 +65,7 @@ def run(api, args, logger):
 
     settings = api.settings()
 
-    if not str(settings.nsupdate_enabled).lower() in ["1", "yes", "y", "true"]:
+    if not settings.nsupdate_enabled:
         return 0
 
     # read our settings
@@ -94,9 +91,9 @@ def run(api, args, logger):
     system = api.find_system(args[0])
 
     # process all interfaces and perform dynamic update for those with --dns-name
-    for (name, interface) in list(system.interfaces.items()):
-        host = interface["dns_name"]
-        host_ip = interface["ip_address"]
+    for (name, interface) in system.interfaces.items():
+        host = interface.dns_name
+        host_ip = interface.ip_address
 
         if not system.is_management_supported(cidr_ok=False):
             continue

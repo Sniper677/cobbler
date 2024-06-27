@@ -21,18 +21,17 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-from builtins import str
-from builtins import object
 import time
 
-import cobbler.templar as templar
 import cobbler.utils as utils
+from cobbler.manager import ManagerModule
 
-from cobbler.utils import _
 from cobbler.cexceptions import CX
 
+MANAGER = None
 
-def register():
+
+def register() -> str:
     """
     The mandatory Cobbler modules registration hook.
 
@@ -41,30 +40,13 @@ def register():
     return "manage"
 
 
-class DnsmasqManager(object):
+class _DnsmasqManager(ManagerModule):
     """
     Handles conversion of internal state to the tftpboot tree layout.
     """
 
-    def __init__(self, collection_mgr, logger, dhcp=None):
-        """
-        Constructor
-
-        :param collection_mgr: The collection manager to resolve all information with.
-        :param logger: The logger to audit all actions with.
-        :param dhcp: This parameter is unused currently.
-        """
-        self.logger = logger
-        self.collection_mgr = collection_mgr
-        self.api = collection_mgr.api
-        self.distros = collection_mgr.distros()
-        self.profiles = collection_mgr.profiles()
-        self.systems = collection_mgr.systems()
-        self.settings = collection_mgr.settings()
-        self.repos = collection_mgr.repos()
-        self.templar = templar.Templar(collection_mgr)
-
-    def what(self):
+    @staticmethod
+    def what() -> str:
         """
         This identifies the module.
 
@@ -72,29 +54,11 @@ class DnsmasqManager(object):
         """
         return "dnsmasq"
 
-    def write_dhcp_lease(self, port, host, ip, mac):
+    def write_configs(self):
         """
-        Not used
+        DHCP files are written when ``manage_dhcp`` is set in our settings.
 
-        :param port: Unused in this module implementation.
-        :param host: Unused in this module implementation.
-        :param ip: Unused in this module implementation.
-        :param mac: Unused in this module implementation.
-        """
-        pass
-
-    def remove_dhcp_lease(self, port, host):
-        """
-        Not used
-
-        :param port: Unused in this module implementation.
-        :param host: Unused in this module implementation.
-        """
-        pass
-
-    def write_dhcp_file(self):
-        """
-        DHCP files are written when manage_dhcp is set in ``/etc/cobbler/settings``.
+        :raises OSError
         """
 
         settings_file = "/etc/dnsmasq.conf"
@@ -102,14 +66,12 @@ class DnsmasqManager(object):
 
         try:
             f2 = open(template_file, "r")
-        except:
-            raise CX(_("error writing template to file: %s") % template_file)
-        template_data = ""
+        except Exception:
+            raise OSError("error writing template to file: %s" % template_file)
         template_data = f2.read()
         f2.close()
 
         system_definitions = {}
-        counter = 0
 
         # we used to just loop through each system, but now we must loop
         # through each network interface of each system.
@@ -121,18 +83,16 @@ class DnsmasqManager(object):
 
             profile = system.get_conceptual_parent()
             distro = profile.get_conceptual_parent()
-            for (name, interface) in list(system.interfaces.items()):
+            for interface in system.interfaces.values():
 
-                mac = interface["mac_address"]
-                ip = interface["ip_address"]
-                host = interface["dns_name"]
-                ipv6 = interface["ipv6_address"]
+                mac = interface.mac_address
+                ip = interface.ip_address
+                host = interface.dns_name
+                ipv6 = interface.ipv6_address
 
                 if not mac:
                     # can't write a DHCP entry for this system
                     continue
-
-                counter += 1
 
                 # In many reallife situations there is a need to control the IP address and hostname for a specific
                 # client when only the MAC address is available. In addition to that in some scenarios there is a need
@@ -140,19 +100,19 @@ class DnsmasqManager(object):
                 # where we need something other than ``pxelinux.0``. So we always write a dhcp-host entry with as much
                 # info as possible to allow maximum control and flexibility within the dnsmasq config.
 
-                systxt = "dhcp-host=net:" + distro.arch.lower() + "," + mac
+                systxt = "dhcp-host=net:" + distro.arch.value.lower() + "," + mac
 
-                if host is not None and host != "":
+                if host != "":
                     systxt += "," + host
 
-                if ip is not None and ip != "":
+                if ip != "":
                     systxt += "," + ip
-                if ipv6 is not None and ipv6 != "":
+                if ipv6 != "":
                     systxt += ",[%s]" % ipv6
 
                 systxt += "\n"
 
-                dhcp_tag = interface["dhcp_tag"]
+                dhcp_tag = interface.dhcp_tag
                 if dhcp_tag == "":
                     dhcp_tag = "default"
 
@@ -166,7 +126,8 @@ class DnsmasqManager(object):
             "insert_cobbler_system_definitions": system_definitions.get("default", ""),
             "date": time.asctime(time.gmtime()),
             "cobbler_server": self.settings.server,
-            "next_server": self.settings.next_server,
+            "next_server_v4": self.settings.next_server_v4,
+            "next_server_v6": self.settings.next_server_v6,
         }
 
         # now add in other DHCP expansions that are not tagged with "default"
@@ -175,7 +136,7 @@ class DnsmasqManager(object):
                 continue
             metadata["insert_cobbler_system_definitions_%s" % x] = system_definitions[x]
 
-        self.templar.render(template_data, metadata, settings_file, None)
+        self.templar.render(template_data, metadata, settings_file)
 
     def regen_ethers(self):
         """
@@ -188,9 +149,9 @@ class DnsmasqManager(object):
         for system in self.systems:
             if not system.is_management_supported(cidr_ok=False):
                 continue
-            for (name, interface) in list(system.interfaces.items()):
-                mac = interface["mac_address"]
-                ip = interface["ip_address"]
+            for interface in system.interfaces.values():
+                mac = interface.mac_address
+                ip = interface.ip_address
                 if not mac:
                     # can't write this w/o a MAC address
                     continue
@@ -207,11 +168,11 @@ class DnsmasqManager(object):
         for system in self.systems:
             if not system.is_management_supported(cidr_ok=False):
                 continue
-            for (name, interface) in list(system.interfaces.items()):
-                mac = interface["mac_address"]
-                host = interface["dns_name"]
-                ip = interface["ip_address"]
-                ipv6 = interface["ipv6_address"]
+            for (_, interface) in system.interfaces.items():
+                mac = interface.mac_address
+                host = interface.dns_name
+                ip = interface.ip_address
+                ipv6 = interface.ipv6_address
                 if not mac:
                     continue
                 if host is not None and host != "" and ipv6 is not None and ipv6 != "":
@@ -220,32 +181,28 @@ class DnsmasqManager(object):
                     fh.write(ip + "\t" + host + "\n")
         fh.close()
 
-    def write_dns_files(self):
-        """
-        Not used
-        """
-        # already taken care of by the regen_hosts()
-        pass
-
-    def sync_dhcp(self):
+    def restart_service(self):
         """
         This restarts the dhcp server and thus applied the newly written config files.
         """
-        restart_dhcp = str(self.settings.restart_dhcp).lower()
-        if restart_dhcp != "0":
-            rc = utils.subprocess_call(self.logger, "service dnsmasq restart")
-            if rc != 0:
-                error_msg = "service dnsmasq restart failed"
-                self.logger.error(error_msg)
-                raise CX(error_msg)
+        service_name = "dnsmasq"
+        if self.settings.restart_dhcp:
+            return_code_service_restart = utils.service_restart(service_name)
+            if return_code_service_restart != 0:
+                self.logger.error("%s service failed", service_name)
+            return return_code_service_restart
 
 
-def get_manager(collection_mgr, logger):
+def get_manager(api):
     """
     Creates a manager object to manage a dnsmasq server.
 
-    :param collection_mgr: The collection manager to resolve all information with.
-    :param logger: The logger to audit all actions with.
+    :param api: The API to resolve all information with.
     :return: The object generated from the class.
     """
-    return DnsmasqManager(collection_mgr, logger)
+    # Singleton used, therefore ignoring 'global'
+    global MANAGER  # pylint: disable=global-statement
+
+    if not MANAGER:
+        MANAGER = _DnsmasqManager(api)
+    return MANAGER

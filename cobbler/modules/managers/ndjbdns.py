@@ -21,52 +21,31 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
-
-
-from builtins import object
 import os
 import subprocess
 
-import cobbler.clogger as clogger
-import cobbler.templar as templar
+from cobbler.manager import ManagerModule
+
+MANAGER = None
 
 
-def register():
+def register() -> str:
     """
     The mandatory Cobbler module registration hook.
     """
     return "manage"
 
 
-def get_manager(config, logger):
+class _NDjbDnsManager(ManagerModule):
     """
-    Get the DNS Manger object.
+    Support for Dr. D J Bernstein DNS server.
 
-    :param config: Unused parameter.
-    :param logger: The logger to audit the actions with.
-    :return: The manager object.
+    This DNS server has a lot of forks with IPv6 support. However, the original has no support for IPv6 and thus we
+    can't add support for it at the moment.
     """
-    return NDjbDnsManager(config, logger)
 
-
-class NDjbDnsManager(object):
-
-    def __init__(self, config, logger):
-        """
-        This class can manage a New-DJBDNS server.
-
-        :param config: Currently an usused parameter.
-        :param logger: The logger to audit the actions with.
-        """
-        self.logger = logger
-        if self.logger is None:
-            self.logger = clogger.Logger()
-
-        self.config = config
-        self.systems = config.systems()
-        self.templar = templar.Templar(config)
-
-    def what(self):
+    @staticmethod
+    def what() -> str:
         """
         Static method to identify the manager.
 
@@ -74,13 +53,10 @@ class NDjbDnsManager(object):
         """
         return "ndjbdns"
 
-    def regen_hosts(self):
-        """
-        Empty stub method to have compability with other dns managers who need this.
-        """
-        pass
+    def __init__(self, api):
+        super().__init__(api)
 
-    def write_dns_files(self):
+    def write_configs(self):
         """
         This writes the new dns configuration file to the disc.
         """
@@ -95,8 +71,8 @@ class NDjbDnsManager(object):
 
         for system in self.systems:
             for (name, interface) in list(system.interfaces.items()):
-                host = interface['dns_name']
-                ip = interface['ip_address']
+                host = interface.dns_name
+                ip = interface.ip_address
 
                 if host:
                     if host in a_records:
@@ -114,3 +90,18 @@ class NDjbDnsManager(object):
 
         if p.returncode != 0:
             raise Exception('Could not regenerate tinydns data file.')
+
+
+def get_manager(api):
+    """
+    Creates a manager object to manage an isc dhcp server.
+
+    :param api: The API which holds all information in the current Cobbler instance.
+    :return: The object to manage the server with.
+    """
+    # Singleton used, therefore ignoring 'global'
+    global MANAGER  # pylint: disable=global-statement
+
+    if not MANAGER:
+        MANAGER = _NDjbDnsManager(api)
+    return MANAGER

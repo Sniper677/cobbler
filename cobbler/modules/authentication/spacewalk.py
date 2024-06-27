@@ -26,14 +26,14 @@ from cobbler.utils import log_exc
 from xmlrpc.client import ServerProxy, Error
 
 
-def register():
+def register() -> str:
     """
     The mandatory Cobbler module registration hook.
     """
     return "authn"
 
 
-def __looks_like_a_token(password):
+def __looks_like_a_token(password) -> bool:
     """
     What spacewalk sends us could be an internal token or it could be a password if it's long and lowercase hex, it's
     /likely/ a token, and we should try to treat it as a token first, if not, we should treat it as a password.  All of
@@ -43,7 +43,6 @@ def __looks_like_a_token(password):
 
     :param password: The password which is possibly a token.
     :return: True if it is possibly a token or False otherwise.
-    :rtype: bool
     """
 
     return password.lower() == password and len(password) > 45
@@ -52,6 +51,7 @@ def __looks_like_a_token(password):
 def __check_auth_token(xmlrpc_client, api_handle, username, password):
     """
     This checks if the auth token is valid.
+
     :param xmlrpc_client: The xmlrpc client to check access for.
     :param api_handle: The api instance to retrieve settings of.
     :param username: The username to try.
@@ -64,18 +64,17 @@ def __check_auth_token(xmlrpc_client, api_handle, username, password):
     except Error:
         logger = api_handle.logger
         logger.error("Error while checking authentication token.")
-        log_exc(logger)
+        log_exc()
         return False
 
 
-def __check_user_login(xmlrpc_client, api_handle, user_enabled, username, password):
+def __check_user_login(xmlrpc_client, api_handle, user_enabled: bool, username, password) -> bool:
     """
     This actually performs the login to spacewalk.
 
     :param xmlrpc_client: The xmlrpc client bound to the target spacewalk instance.
     :param api_handle: The api instance to retrieve settings of.
     :param user_enabled: Weather we allow Spacewalk users to log in or not.
-    :type user_enabled: bool
     :param username: The username to log in.
     :param password: The password to log in.
     :return: True if users are allowed to log in and he is of the role ``config_admin`` or ``org_admin``.
@@ -89,11 +88,11 @@ def __check_user_login(xmlrpc_client, api_handle, user_enabled, username, passwo
     except Error:
         logger = api_handle.logger
         logger.error("Error while checking user authentication data.")
-        log_exc(logger)
+        log_exc()
     return False
 
 
-def authenticate(api_handle, username, password):
+def authenticate(api_handle, username: str, password: str) -> bool:
     """
     Validate a username/password combo. This will pass the username and password back to Spacewalk to see if this
     authentication request is valid.
@@ -101,10 +100,10 @@ def authenticate(api_handle, username, password):
     See also: https://github.com/uyuni-project/uyuni/blob/master/java/code/src/com/redhat/rhn/frontend/xmlrpc/auth/AuthHandler.java#L133
 
     :param api_handle: The api instance to retrieve settings of.
-    :param username: The username to authenticate agains spacewalk/uyuni/SUSE Manager
-    :param password: The password to authenticate agains spacewalk/uyuni/SUSE Manager
+    :param username: The username to authenticate against spacewalk/uyuni/SUSE Manager
+    :param password: The password to authenticate against spacewalk/uyuni/SUSE Manager
     :return: True if it succeeded, False otherwise.
-    :rtype: bool
+    :raises CX: Raised in case ``api_handle`` is missing.
     """
 
     if api_handle is None:
@@ -125,7 +124,6 @@ def authenticate(api_handle, username, password):
             if __check_auth_token(client, api_handle, username, password) != 1:
                 return __check_user_login(client, api_handle, user_enabled, username, password)
             return True
-        else:
-            # It's an older version of spacewalk, so just try the username/pass.
-            # OR: We know for sure it's not a token because it's not lowercase hex.
-            return __check_user_login(client, api_handle, user_enabled, username, password)
+        # It's an older version of spacewalk, so just try the username/pass.
+        # OR: We know for sure it's not a token because it's not lowercase hex.
+        return __check_user_login(client, api_handle, user_enabled, username, password)

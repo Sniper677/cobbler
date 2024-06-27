@@ -1,3 +1,5 @@
+MAKEFLAGS += --no-print-directory
+
 #
 # Setup Makefile to match your environment
 #
@@ -62,20 +64,18 @@ else
 		*.py \
 		cobbler/*.py \
 		cobbler/modules/*.py \
-		cobbler/web/*.py cobbler/web/templatetags/*.py \
-		bin/cobbler* bin/*.py web/cobbler.wsgi
+		bin/cobbler*
 endif
 
 ifeq ($(strip $(PYCODESTYLE)),)
 	@echo "No pycodestyle found"
 else
 	@echo "checking: pycodestyle"
-	@${PYCODESTYLE} -r --ignore E501,E402,E722,W504 \
+	@${PYCODESTYLE} -r --ignore E501,E402,E722,W503 \
 			*.py \
 		cobbler/*.py \
 		cobbler/modules/*.py \
-		cobbler/web/*.py cobbler/web/templatetags/*.py \
-		bin/cobbler* bin/*.py web/cobbler.wsgi
+		bin/cobbler*
 endif
 
 authors: ## Creates the AUTHORS file.
@@ -95,17 +95,23 @@ release: clean qa authors sdist ## Creates the full release.
 	@cp distro_build_configs.sh release/
 	@cp cobbler.spec release/
 
-test-centos7: ## Executes the testscript for testing cobbler in a docker container on CentOS7.
-	./tests/build-and-install-rpms.sh --with-tests el7 dockerfiles/CentOS7.dockerfile
-
 test-centos8: ## Executes the testscript for testing cobbler in a docker container on CentOS8.
-	./tests/build-and-install-rpms.sh --with-tests el8 dockerfiles/CentOS8.dockerfile
+	./docker/rpms/build-and-install-rpms.sh el8 docker/rpms/CentOS_8/CentOS8.dockerfile
 
-test-fedora31: ## Executes the testscript for testing cobbler in a docker container on Fedora 31.
-	./tests/build-and-install-rpms.sh --with-tests f31 dockerfiles/Fedora31.dockerfile
+test-fedora34: ## Executes the testscript for testing cobbler in a docker container on Fedora 33.
+	./docker/rpms/build-and-install-rpms.sh fc34 docker/rpms/Fedora_34/Fedora34.dockerfile
 
 test-debian10: ## Executes the testscript for testing cobbler in a docker container on Debian 10.
-	./tests/build-and-install-debs.sh --with-tests deb10 dockerfiles/Debian10.dockerfile
+	./docker/debs/build-and-install-debs.sh deb10 docker/debs/Debian_10/Debian10.dockerfile
+
+test-debian11: ## Executes the testscript for testing cobbler in a docker container on Debian 11.
+	./docker/debs/build-and-install-debs.sh deb11 docker/debs/Debian_11/Debian11.dockerfile
+
+system-test: ## Runs the system tests
+	$(MAKE) -C system-tests
+
+system-test-env: ## Configures the environment for system tests
+	$(MAKE) -C system-tests bootstrap
 
 build: ## Runs the Python Build.
 	@source distro_build_configs.sh; \
@@ -132,18 +138,8 @@ restorestate: ## This restores a state which was previously saved via the target
 	@source distro_build_configs.sh; \
 	${PYTHON} setup.py -v restorestate --root $(DESTDIR); \
 	find $(DESTDIR)/var/lib/cobbler/triggers | xargs chmod +x
-	if [ -n "`getent passwd apache`" ] ; then \
-		chown -R apache $(DESTDIR)/var/www/cobbler; \
-	elif [ -n "`getent passwd wwwrun`" ] ; then \
-		chown -R wwwrun $(DESTDIR)/usr/share/cobbler/web; \
-	elif [ -n "`getent passwd www-data`"] ; then \
-		chown -R www-data $(DESTDIR)/usr/share/cobbler/web; \
-	fi
 	if [ -d $(DESTDIR)/var/www/cobbler ] ; then \
 		chmod -R +x $(DESTDIR)/var/www/cobbler/svc; \
-	fi
-	if [ -d $(DESTDIR)/usr/share/cobbler/web ] ; then \
-		chmod -R +x $(DESTDIR)/usr/share/cobbler/web; \
 	fi
 	if [ -d $(DESTDIR)/srv/www/cobbler/svc ]; then \
 		chmod -R +x $(DESTDIR)/srv/www/cobbler/svc; \
@@ -186,3 +182,6 @@ eraseconfig: ## Deletes the cobbler data jsons which are created when using the 
 	-rm /var/lib/cobbler/cobbler_collections/mgmtclasses/*
 	-rm /var/lib/cobbler/cobbler_collections/files/*
 	-rm /var/lib/cobbler/cobbler_collections/packages/*
+	-rm /var/lib/cobbler/cobbler_collections/menus/*
+
+.PHONY: system-test

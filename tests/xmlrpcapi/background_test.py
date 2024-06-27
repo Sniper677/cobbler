@@ -1,7 +1,6 @@
 import pytest
 
 
-@pytest.mark.usefixtures("cobbler_xmlrpc_base")
 class TestBackground:
     """
     Class to test various background jobs
@@ -21,15 +20,6 @@ class TestBackground:
 
         # Act
         result = remote.background_buildiso({}, token)
-
-        # Assert
-        assert result
-
-    def test_background_dlccontent(self, remote, token):
-        # Arrange
-
-        # Act
-        result = remote.background_dlcontent({}, token)
 
         # Assert
         assert result

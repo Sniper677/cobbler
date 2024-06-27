@@ -18,45 +18,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-import os
+import uuid
+from typing import List, Union
 
+from cobbler import enums, validate
 from cobbler.items import item
 from cobbler import utils
 from cobbler.cexceptions import CX
-from cobbler.utils import _
 from cobbler import grub
-
-# this data structure is described in item.py
-FIELDS = [
-    # non-editable in UI (internal)
-    ["ctime", 0, 0, "", False, "", 0, "float"],
-    ["depth", 0, 0, "Depth", False, "", 0, "int"],
-    ["mtime", 0, 0, "", False, "", 0, "float"],
-    ["source_repos", [], 0, "Source Repos", False, "", 0, "list"],
-    ["tree_build_time", 0, 0, "Tree Build Time", False, "", 0, "str"],
-    ["uid", "", 0, "", False, "", 0, "str"],
-
-    # editable in UI
-    ["arch", 'x86_64', 0, "Architecture", True, "", utils.get_valid_archs(), "str"],
-    ["autoinstall_meta", {}, 0, "Automatic Installation Template Metadata", True, "Ex: dog=fang agent=86", 0, "dict"],
-    ["boot_files", {}, 0, "TFTP Boot Files", True, "Files copied into tftpboot beyond the kernel/initrd", 0, "list"],
-    ["boot_loader", "<<inherit>>", 0, "Boot loader", True, "Network installation boot loader", utils.get_supported_system_boot_loaders(), "str"],
-    ["breed", 'redhat', 0, "Breed", True, "What is the type of distribution?", utils.get_valid_breeds(), "str"],
-    ["comment", "", 0, "Comment", True, "Free form text description", 0, "str"],
-    ["fetchable_files", {}, 0, "Fetchable Files", True, "Templates for tftp or wget/curl", 0, "list"],
-    ["initrd", None, 0, "Initrd", True, "Absolute path to kernel on filesystem", 0, "str"],
-    ["kernel", None, 0, "Kernel", True, "Absolute path to kernel on filesystem", 0, "str"],
-    ["remote_boot_initrd", None, 0, "Remote Boot Initrd", True, "URL the bootloader directly retrieves and boots from", 0, "str"],
-    ["remote_boot_kernel", None, 0, "Remote Boot Kernel", True, "URL the bootloader directly retrieves and boots from", 0, "str"],
-    ["kernel_options", {}, 0, "Kernel Options", True, "Ex: selinux=permissive", 0, "dict"],
-    ["kernel_options_post", {}, 0, "Kernel Options (Post Install)", True, "Ex: clocksource=pit noapic", 0, "dict"],
-    ["mgmt_classes", [], 0, "Management Classes", True, "Management classes for external config management", 0, "list"],
-    ["name", "", 0, "Name", True, "Ex: Fedora-11-i386", 0, "str"],
-    ["os_version", "virtio26", 0, "OS Version", True, "Needed for some virtualization optimizations", utils.get_valid_os_versions(), "str"],
-    ["owners", "SETTINGS:default_ownership", 0, "Owners", True, "Owners list for authz_ownership (space delimited)", 0, "list"],
-    ["redhat_management_key", "", "", "Redhat Management Key", True, "Registration key for RHN, Spacewalk, or Satellite", 0, "str"],
-    ["template_files", {}, 0, "Template Files", True, "File mappings for built-in config management", 0, "dict"]
-]
 
 
 class Distro(item.Item):
@@ -64,26 +33,38 @@ class Distro(item.Item):
     A Cobbler distribution object
     """
 
-    TYPE_NAME = _("distro")
     COLLECTION_TYPE = "distro"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, api, *args, **kwargs):
         """
         This creates a Distro object.
 
+        :param api: The Cobbler API object which is used for resolving information.
         :param args: Place for extra parameters in this distro object.
         :param kwargs: Place for extra parameters in this distro object.
         """
-        super(Distro, self).__init__(*args, **kwargs)
-        self.kernel_options = {}
-        self.kernel_options_post = {}
-        self.autoinstall_meta = {}
-        self.source_repos = []
-        self.fetchable_files = {}
-        self.boot_files = {}
-        self.template_files = {}
-        self.remote_grub_kernel = ""
-        self.remote_grub_initrd = ""
+        super().__init__(api, *args, **kwargs)
+        self._tree_build_time = 0.0
+        self._arch = enums.Archs.X86_64
+        self._boot_loaders: Union[list, str] = enums.VALUE_INHERITED
+        self._breed = ""
+        self._initrd = ""
+        self._kernel = ""
+        self._mgmt_classes = []
+        self._os_version = ""
+        self._redhat_management_key = ""
+        self._source_repos = []
+        self._fetchable_files = {}
+        self._remote_boot_kernel = ""
+        self._remote_grub_kernel = ""
+        self._remote_boot_initrd = ""
+        self._remote_grub_initrd = ""
+        self._supported_boot_loaders = []
+
+    def __getattr__(self, name):
+        if name == "ks_meta":
+            return self.autoinstall_meta
+        raise AttributeError("Attribute \"%s\" did not exist on object type Distro." % name)
 
     #
     # override some base class methods first (item.Item)
@@ -95,22 +76,38 @@ class Distro(item.Item):
 
         :return: The cloned object. Not persisted on the disk or in a database.
         """
+        # FIXME: Change unique base attributes
         _dict = self.to_dict()
-        cloned = Distro(self.collection_mgr)
+        # Drop attributes which are computed from other attributes
+        computed_properties = ["remote_grub_initrd", "remote_grub_kernel"]
+        for property_name in computed_properties:
+            _dict.pop(property_name, None)
+        cloned = Distro(self.api)
         cloned.from_dict(_dict)
+        cloned.uid = uuid.uuid4().hex
         return cloned
 
-    def get_fields(self):
-        """
-        Return the list of fields and their properties
-        """
-        return FIELDS
+    @classmethod
+    def _remove_depreacted_dict_keys(cls, dictionary: dict):
+        r"""
+        See :meth:`~cobbler.items.item.Item._remove_depreacted_dict_keys`.
 
-    def get_parent(self):
+        :param dictionary: The dict to update
         """
-        Distros don't have parent objects.
+        if "parent" in dictionary:
+            dictionary.pop("parent")
+        super()._remove_depreacted_dict_keys(dictionary)
+
+    def from_dict(self, dictionary: dict):
         """
-        return None
+        Initializes the object with attributes from the dictionary.
+
+        :param dictionary: The dictionary with values.
+        """
+        if "name" in dictionary:
+            self.name = dictionary["name"]
+        self._remove_depreacted_dict_keys(dictionary)
+        super().from_dict(dictionary)
 
     def check_if_valid(self):
         """
@@ -119,131 +116,262 @@ class Distro(item.Item):
         if self.name is None:
             raise CX("name is required")
         if self.kernel is None:
-            raise CX("Error with distro %s - kernel is required" % (self.name))
+            raise CX("Error with distro %s - kernel is required" % self.name)
         if self.initrd is None:
-            raise CX("Error with distro %s - initrd is required" % (self.name))
-
-        # self.remote_grub_kernel has to be set in set_remote_boot_kernel and here
-        # in case the distro is read from json file (setters are not called).
-        if self.remote_boot_kernel:
-            self.remote_grub_kernel = grub.parse_grub_remote_file(self.remote_boot_kernel)
-            if not self.remote_grub_kernel:
-                raise CX("Invalid URL for remote boot kernel: %s" % self.remote_boot_kernel)
-        if self.remote_boot_initrd:
-            self.remote_grub_initrd = grub.parse_grub_remote_file(self.remote_boot_initrd)
-            if not self.remote_grub_initrd:
-                raise CX("Invalid URL for remote boot initrd: %s" % self.remote_boot_initrd)
-
-        if utils.file_is_remote(self.kernel):
-            if not utils.remote_file_exists(self.kernel):
-                raise CX("Error with distro %s - kernel '%s' not found" % (self.name, self.kernel))
-        elif not os.path.exists(self.kernel):
-            raise CX("Error with distro %s - kernel '%s' not found" % (self.name, self.kernel))
-
-        if utils.file_is_remote(self.initrd):
-            if not utils.remote_file_exists(self.initrd):
-                raise CX("Error with distro %s - initrd path '%s' not found" % (self.name, self.initrd))
-        elif not os.path.exists(self.initrd):
-            raise CX("Error with distro %s - initrd path '%s' not found" % (self.name, self.initrd))
+            raise CX("Error with distro %s - initrd is required" % self.name)
 
     #
     # specific methods for item.Distro
     #
 
-    def set_kernel(self, kernel):
+    @property
+    def parent(self):
         """
-        Specifies a kernel. The kernel parameter is a full path, a filename in the configured kernel directory (set in
-        /etc/cobbler.conf) or a directory path that would contain a selectable kernel. Kernel naming conventions are
-        checked, see docs in the utils module for ``find_kernel``.
+        Distros don't have parent objects.
+        """
+        return None
 
-        :param kernel:
-        :raises CX: If the kernel was not found
+    @parent.setter
+    def parent(self, value):
         """
-        if kernel is None or kernel == "":
-            raise CX("kernel not specified")
-        if utils.find_kernel(kernel):
-            self.kernel = kernel
+        Setter for the parent property.
+
+        :param value: Is ignored.
+        """
+        self.logger.warning("Setting the parent of a distribution is not supported. Ignoring action!")
+
+    @property
+    def kernel(self) -> str:
+        """
+        Specifies a kernel. The kernel parameter is a full path, a filename in the configured kernel directory or a
+        directory path that would contain a selectable kernel. Kernel naming conventions are checked, see docs in the
+        utils module for ``find_kernel``.
+
+        :getter: The last successfully validated kernel path.
+        :setter: May raise a ``ValueError`` or ``TypeError`` in case of validation errors.
+        """
+        return self._kernel
+
+    @kernel.setter
+    def kernel(self, kernel: str):
+        """
+        Setter for the ``kernel`` property.
+
+        :param kernel: The path to the kernel.
+        :raises TypeError: If kernel was not of type str.
+        :raises ValueError: If the kernel was not found.
+        """
+        if not isinstance(kernel, str):
+            raise TypeError("kernel was not of type str")
+        if not utils.find_kernel(kernel):
+            raise ValueError("kernel not found: %s" % kernel)
+        self._kernel = kernel
+
+    @property
+    def remote_boot_kernel(self) -> str:
+        """
+        URL to a remote kernel. If the bootloader supports this feature, it directly tries to retrieve the kernel and
+        boot it. (grub supports tftp and http protocol and server must be an IP).
+
+        :getter: Returns the current remote URL to boot from.
+        :setter: Raises a ``TypeError`` or ``ValueError`` in case the provided value was not correct.
+        """
+        # TODO: Obsolete it and merge with kernel property
+        return self._remote_boot_kernel
+
+    @remote_boot_kernel.setter
+    def remote_boot_kernel(self, remote_boot_kernel: str):
+        """
+        Setter for the ``remote_boot_kernel`` property.
+
+        :param remote_boot_kernel: The new URL to the remote booted kernel.
+        :raises TypeError: Raised in case the URL is not of type str.
+        :raises ValueError: Raised in case the validation is not succeeding.
+        """
+        if not isinstance(remote_boot_kernel, str):
+            raise TypeError("Field remote_boot_kernel of distro needs to be of type str!")
+        if not remote_boot_kernel:
+            self._remote_grub_kernel = remote_boot_kernel
+            self._remote_boot_kernel = remote_boot_kernel
             return
-        raise CX("kernel not found: %s" % kernel)
+        if not validate.validate_boot_remote_file(remote_boot_kernel):
+            raise ValueError("remote_boot_kernel needs to be a valid URL starting with tftp or http!")
+        parsed_url = grub.parse_grub_remote_file(remote_boot_kernel)
+        if parsed_url is None:
+            raise ValueError("Invalid URL for remote boot kernel: %s" % remote_boot_kernel)
+        self._remote_grub_kernel = parsed_url
+        self._remote_boot_kernel = remote_boot_kernel
 
-    def set_remote_boot_kernel(self, remote_boot_kernel):
+    @property
+    def tree_build_time(self) -> float:
         """
-        URL to a remote kernel. If the bootloader supports this feature,
-        it directly tries to retrieve the kernel and boot it.
-        (grub supports tftp and http protocol and server must be an IP).
-        """
-        if remote_boot_kernel:
-            self.remote_grub_kernel = grub.parse_grub_remote_file(remote_boot_kernel)
-            if not self.remote_grub_kernel:
-                raise CX("Invalid URL for remote boot kernel: %s" % remote_boot_kernel)
-            self.remote_boot_kernel = remote_boot_kernel
-            return
-        # Set to None or ""
-        self.remote_grub_kernel = self.remote_boot_kernel = remote_boot_kernel
+        Represents the import time of the distro. If not imported, this field is not meaningful.
 
-    def set_tree_build_time(self, datestamp):
+        :getter:
+        :setter:
         """
-        Sets the import time of the distro. If not imported, this field is not meaningful.
+        return self._tree_build_time
+
+    @tree_build_time.setter
+    def tree_build_time(self, datestamp: float):
+        r"""
+        Setter for the ``tree_build_time`` property.
 
         :param datestamp: The datestamp to save the builddate. There is an attempt to convert it to a float, so please
                           make sure it is compatible to this.
+        :raises TypeError: In case the value was not of type ``float``.
         """
-        self.tree_build_time = float(datestamp)
+        if isinstance(datestamp, int):
+            datestamp = float(datestamp)
+        if not isinstance(datestamp, float):
+            raise TypeError("datestamp needs to be of type float")
+        self._tree_build_time = datestamp
 
-    def set_breed(self, breed):
+    @property
+    def breed(self) -> str:
+        """
+        The repository system breed. This decides some defaults for most actions with a repo in Cobbler.
+
+        :getter: The breed detected.
+        :setter: May raise a ``ValueError`` or ``TypeError`` in case the given value is wrong.
+        """
+        return self._breed
+
+    @breed.setter
+    def breed(self, breed: str):
         """
         Set the Operating system breed.
 
         :param breed: The new breed to set.
         """
-        return utils.set_breed(self, breed)
+        self._breed = validate.validate_breed(breed)
 
-    def set_os_version(self, os_version):
+    @property
+    def os_version(self) -> str:
+        r"""
+        The operating system version which the image contains.
+
+        :getter: The sanitized operating system version.
+        :setter: Accepts a str which will be validated against the ``distro_signatures.json``.
+        """
+        return self._os_version
+
+    @os_version.setter
+    def os_version(self, os_version: str):
         """
         Set the Operating System Version.
 
         :param os_version: The new OS Version.
         """
-        return utils.set_os_version(self, os_version)
+        self._os_version = validate.validate_os_version(os_version, self.breed)
 
-    def set_initrd(self, initrd):
+    @property
+    def initrd(self) -> str:
         """
         Specifies an initrd image. Path search works as in set_kernel. File must be named appropriately.
 
+        :getter: The current path to the initrd.
+        :setter: May raise a ``TypeError`` or ``ValueError`` in case the validation is not successful.
+        """
+        return self._initrd
+
+    @initrd.setter
+    def initrd(self, initrd: str):
+        r"""
+        Setter for the ``initrd`` property.
+
         :param initrd: The new path to the ``initrd``.
+        :raises TypeError: In case the value was not of type ``str``.
+        :raises ValueError: In case the new value was not found or specified.
         """
-        if initrd is None or initrd == "":
-            raise CX("initrd not specified")
+        if not isinstance(initrd, str):
+            raise TypeError("initrd must be of type str")
+        if not initrd:
+            raise ValueError("initrd not specified")
         if utils.find_initrd(initrd):
-            self.initrd = initrd
+            self._initrd = initrd
             return
-        raise CX(_("initrd not found"))
+        raise ValueError("initrd not found")
 
-    def set_remote_boot_initrd(self, remote_boot_initrd):
+    @property
+    def remote_grub_kernel(self) -> str:
         """
-        URL to a remote initrd. If the bootloader supports this feature,
-        it directly tries to retrieve the initrd and boot it.
-        (grub supports tftp and http protocol and server must be an IP).
+        This is tied to the ``remote_boot_kernel`` property. It contains the URL of that field in a format which grub
+        can use directly.
+
+        :getter: The computed URL from ``remote_boot_kernel``.
         """
-        if remote_boot_initrd:
-            self.remote_grub_initrd = grub.parse_grub_remote_file(remote_boot_initrd)
-            if not self.remote_grub_initrd:
-                raise CX("Invalid URL for remote boot initrd: %s" % remote_boot_initrd)
-            self.remote_boot_initrd = remote_boot_initrd
+        return self._remote_grub_kernel
+
+    @property
+    def remote_grub_initrd(self) -> str:
+        r"""
+        This is tied to the ``remote_boot_initrd`` property. It contains the URL of that field in a format which grub
+        can use directly.
+
+        :getter: The computed URL from ``remote_boot_initrd``.
+        """
+        return self._remote_grub_initrd
+
+    @property
+    def remote_boot_initrd(self) -> str:
+        r"""
+        URL to a remote initrd. If the bootloader supports this feature, it directly tries to retrieve the initrd and
+        boot it. (grub supports tftp and http protocol and server must be an IP).
+
+        :getter: Returns the current remote URL to boot from.
+        :setter: Raises a ``TypeError`` or ``ValueError`` in case the provided value was not correct.
+        """
+        return self._remote_boot_initrd
+
+    @remote_boot_initrd.setter
+    def remote_boot_initrd(self, remote_boot_initrd: str):
+        """
+        The setter for the ``remote_boot_initrd`` property.
+
+        :param remote_boot_initrd: The new value for the property.
+        :raises TypeError: In case the value was not of type ``str``.
+        :raises ValueError: In case the new value could not be validated successfully.
+        """
+        if not isinstance(remote_boot_initrd, str):
+            raise TypeError("remote_boot_initrd must be of type str!")
+        if not remote_boot_initrd:
+            self._remote_boot_initrd = remote_boot_initrd
+            self._remote_grub_initrd = remote_boot_initrd
             return
-        # Set to None or ""
-        self.remote_grub_initrd = self.remote_boot_initrd = remote_boot_initrd
+        if not validate.validate_boot_remote_file(remote_boot_initrd):
+            raise ValueError("remote_boot_initrd needs to be a valid URL starting with tftp or http!")
+        parsed_url = grub.parse_grub_remote_file(remote_boot_initrd)
+        if parsed_url is None:
+            raise ValueError("Invalid URL for remote boot initrd: %s" % remote_boot_initrd)
+        self._remote_grub_initrd = parsed_url
+        self._remote_boot_initrd = remote_boot_initrd
 
-    def set_source_repos(self, repos):
+    @property
+    def source_repos(self) -> list:
         """
         A list of http:// URLs on the Cobbler server that point to yum configuration files that can be used to
         install core packages. Use by ``cobbler import`` only.
 
-        :param repos: The list of URLs.
+        :getter: The source repos used.
+        :setter: The new list of source repos to use.
         """
-        self.source_repos = repos
+        return self._source_repos
 
-    def set_arch(self, arch):
+    @source_repos.setter
+    def source_repos(self, repos: list):
+        r"""
+        Setter for the ``source_repos`` property.
+
+        :param repos: The list of URLs.
+        :raises TypeError: In case the value was not of type ``str``.
+        """
+        if not isinstance(repos, list):
+            raise TypeError("Field source_repos in object distro needs to be of type list.")
+        self._source_repos = repos
+
+    @property
+    def arch(self):
         """
         The field is mainly relevant to PXE provisioning.
 
@@ -254,67 +382,105 @@ class Distro(item.Item):
         This field is named "arch" because mainly on Linux, we only care about the architecture, though if (in the
         future) new provisioning types are added, an arch value might be something like "bsd_x86".
 
-        :param arch: The architecture of the operating system distro.
-        """
-        return utils.set_arch(self, arch)
-
-    def get_arch(self):
-        """
-        Return the architecture of the distribution
-
         :return: Return the current architecture.
         """
-        return self.arch
+        return self._arch
 
-    def set_supported_boot_loaders(self, supported_boot_loaders):
+    @arch.setter
+    def arch(self, arch: Union[str, enums.Archs]):
+        """
+        The setter for the arch property.
+
+        :param arch: The architecture of the operating system distro.
+        """
+        self._arch = enums.Archs.to_enum(arch)
+
+    @property
+    def supported_boot_loaders(self):
         """
         Some distributions, particularly on powerpc, can only be netbooted using specific bootloaders.
 
-        :param supported_boot_loaders: The bootloaders which are available for being set.
+        :return: The bootloaders which are available for being set.
         """
-        if len(supported_boot_loaders) < 1:
-            raise CX(_("No valid supported boot loaders specified for distro '%s'" % self.name))
-        self.supported_boot_loaders = supported_boot_loaders
-        self.boot_loader = supported_boot_loaders[0]
+        if len(self._supported_boot_loaders) == 0:
+            self._supported_boot_loaders = utils.get_supported_distro_boot_loaders(self)
+        return self._supported_boot_loaders
 
-    def set_boot_loader(self, name):
+    @property
+    def boot_loaders(self) -> list:
+        """
+        All boot loaders for which Cobbler generates entries for.
+
+        :getter: The bootloaders.
+        :setter: Validates this against the list of well-known bootloaders and raises a ``TypeError`` or ``ValueError``
+                 in case the validation goes south.
+        """
+        if self._boot_loaders == enums.VALUE_INHERITED:
+            return self.supported_boot_loaders
+        return self._boot_loaders
+
+    @boot_loaders.setter
+    def boot_loaders(self, boot_loaders: List[str]):
         """
         Set the bootloader for the distro.
 
-        :param name: The name of the bootloader. Must be one of the supported ones.
+        :param boot_loaders: The list with names of the bootloaders. Must be one of the supported ones.
+        :raises TypeError: In case the value could not be converted to a list or was not of type list.
+        :raises ValueError: In case the boot loader is not in the list of valid boot loaders.
         """
-        try:
-            # If we have already loaded the supported boot loaders from
-            # the signature, use that data
-            supported_distro_boot_loaders = self.supported_boot_loaders
-        except:
-            # otherwise, refresh from the signatures / defaults
-            self.supported_boot_loaders = utils.get_supported_distro_boot_loaders(self)
-            supported_distro_boot_loaders = self.supported_boot_loaders
-        if name not in supported_distro_boot_loaders:
-            raise CX(_("Invalid boot loader name: %s. Supported boot loaders are: %s" %
-                       (name, ' '.join(supported_distro_boot_loaders))))
-        self.boot_loader = name
+        if isinstance(boot_loaders, str):
+            # allow the magic inherit string to persist, otherwise split the string.
+            if boot_loaders == enums.VALUE_INHERITED:
+                self._boot_loaders = enums.VALUE_INHERITED
+                return
+            else:
+                boot_loaders = utils.input_string_or_list(boot_loaders)
 
-    def set_redhat_management_key(self, management_key):
+        if not isinstance(boot_loaders, list):
+            raise TypeError("boot_loaders needs to be of type list!")
+
+        if not set(boot_loaders).issubset(self.supported_boot_loaders):
+            raise ValueError("Invalid boot loader names: %s. Supported boot loaders are: %s" %
+                             (boot_loaders, ' '.join(self.supported_boot_loaders)))
+        self._boot_loaders = boot_loaders
+
+    @property
+    def redhat_management_key(self) -> str:
+        """
+        Get the redhat management key. This is probably only needed if you have spacewalk, uyuni or SUSE Manager
+        running.
+
+        :return: The key as a string.
+        """
+        return self._redhat_management_key
+
+    @redhat_management_key.setter
+    def redhat_management_key(self, management_key: str):
         """
         Set the redhat management key. This is probably only needed if you have spacewalk, uyuni or SUSE Manager
         running.
 
         :param management_key: The redhat management key.
         """
-        if management_key is None:
-            self.redhat_management_key = ""
-        self.redhat_management_key = management_key
+        if not isinstance(management_key, str):
+            raise TypeError("Field redhat_management_key of object distro needs to be of type str!")
+        self._redhat_management_key = management_key
 
-    def get_redhat_management_key(self):
+    @property
+    def children(self) -> list:
         """
-        Get the redhat management key. This is probably only needed if you have spacewalk, uyuni or SUSE Manager
-        running.
+        This property represents all children of a distribution. It should not be set manually.
 
-        :return: The key as a string.
-        :rtype: str
+        :getter: The children of the distro.
+        :setter: No validation is done because this is a Cobbler internal property.
         """
-        return self.redhat_management_key
+        return self._children
 
-# EOF
+    @children.setter
+    def children(self, value: list):
+        """
+        Setter for the children property.
+
+        :param value: The new children of the distro.
+        """
+        self._children = value

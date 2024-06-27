@@ -24,28 +24,42 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 
 import os
 import glob
-import simplejson
-import yaml
+import json
 
 import cobbler.api as capi
+from cobbler import settings
 from cobbler.cexceptions import CX
-
 
 libpath = "/var/lib/cobbler/collections"
 
 
-def register():
+def register() -> str:
     """
     The mandatory Cobbler module registration hook.
     """
     return "serializer"
 
 
-def what():
+def what() -> str:
     """
     Module identification function
     """
     return "serializer/file"
+
+
+def __find_double_json_files(filename: str):
+    """
+    Finds a file with duplicate .json ending and renames it.
+    :param filename: Filename to be checked
+    :raises FileExistsError: If both JSON files exist
+    """
+
+    if not os.path.isfile(filename):
+        if os.path.isfile(filename + ".json"):
+            os.rename(filename + ".json", filename)
+    else:
+        if os.path.isfile(filename + ".json"):
+            raise FileExistsError("Both JSON files (%s) exist!" % filename)
 
 
 def serialize_item(collection, item):
@@ -61,8 +75,7 @@ def serialize_item(collection, item):
 
     collection_types = collection.collection_types()
     filename = os.path.join(libpath, collection_types, item.name + ".json")
-
-    _dict = item.to_dict()
+    __find_double_json_files(filename)
 
     if capi.CobblerAPI().settings().serializer_pretty_json:
         sort_keys = True
@@ -71,12 +84,10 @@ def serialize_item(collection, item):
         sort_keys = False
         indent = None
 
-    _dict = item.to_dict()
-    fd = open(filename, "w+")
-    data = simplejson.dumps(_dict, encoding="utf-8", sort_keys=sort_keys, indent=indent)
-    fd.write(data)
-
-    fd.close()
+    _dict = item.serialize()
+    with open(filename, "w+") as file_descriptor:
+        data = json.dumps(_dict, sort_keys=sort_keys, indent=indent)
+        file_descriptor.write(data)
 
 
 def serialize_delete(collection, item):
@@ -89,6 +100,7 @@ def serialize_delete(collection, item):
 
     collection_types = collection.collection_types()
     filename = os.path.join(libpath, collection_types, item.name + ".json")
+    __find_double_json_files(filename)
 
     if os.path.exists(filename):
         os.remove(filename)
@@ -102,31 +114,20 @@ def serialize(collection):
     """
 
     # do not serialize settings
-    ctype = collection.collection_type()
-    if ctype != "settings":
+    if collection.collection_type() != "setting":
         for x in collection:
             serialize_item(collection, x)
 
 
-def deserialize_raw(collection_types):
+def deserialize_raw(collection_types: str):
     """
     Loads a collection from the disk.
 
     :param collection_types: The type of collection to load.
     :return: The loaded dictionary.
     """
-    # FIXME: code to load settings file should not be replicated in all serializer subclasses.
     if collection_types == "settings":
-        with open("/etc/cobbler/settings") as fd:
-            _dict = yaml.safe_load(fd.read())
-
-        # include support
-        for ival in _dict.get("include", []):
-            for ifile in glob.glob(ival):
-                with open(ifile, 'r') as fd:
-                    _dict.update(yaml.safe_load(fd.read()))
-
-        return _dict
+        return settings.read_settings_file()
     else:
         results = []
 
@@ -134,50 +135,26 @@ def deserialize_raw(collection_types):
         all_files = glob.glob("%s/*.json" % path)
 
         for f in all_files:
-            fd = open(f)
-            json_data = fd.read()
-            _dict = simplejson.loads(json_data, encoding='utf-8')
-            results.append(_dict)
-            fd.close()
+            with open(f) as file_descriptor:
+                json_data = file_descriptor.read()
+                _dict = json.loads(json_data)
+                results.append(_dict)
         return results
 
 
-def filter_upgrade_duplicates(file_list):
-    """
-    In a set of files, some ending with .json, some not, return the list of files with the .json ones taking priority
-    over the ones that are not.
-
-    :param file_list: The list of files to remove duplicates from.
-    :return: The filtered list of files. Normally this should only return ``.json``-Files.
-    """
-    bases = {}
-    for f in file_list:
-        basekey = f.replace(".json", "")
-        if f.endswith(".json"):
-            bases[basekey] = f
-        else:
-            lookup = bases.get(basekey, "")
-            if not lookup.endswith(".json"):
-                bases[basekey] = f
-    return list(bases.values())
-
-
-def deserialize(collection, topological=True):
+def deserialize(collection, topological: bool = True):
     """
     Load a collection from file system.
 
     :param collection: The collection to deserialize.
     :param topological: If the collection list should be sorted by the
-                        collection dict depth value or not.
-    :type topological: bool
+                        collection dict key 'depth' value or not.
     """
 
     datastruct = deserialize_raw(collection.collection_types())
-    if topological and type(datastruct) == list:
-        datastruct.sort(key = lambda x: x["depth"])
-    if type(datastruct) == dict:
+    if topological and isinstance(datastruct, list):
+        datastruct.sort(key=lambda x: x.get("depth", 1))
+    if isinstance(datastruct, dict):
         collection.from_dict(datastruct)
-    elif type(datastruct) == list:
+    elif isinstance(datastruct, list):
         collection.from_list(datastruct)
-
-# EOF

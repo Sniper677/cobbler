@@ -53,8 +53,8 @@ Any problems detected should be corrected, with the potential exception of DHCP 
 use your judgement as to whether they apply to your environment. Run ``cobbler sync`` after making any changes to the
 configuration files to ensure those changes are applied to the environment.
 
-It is especially important that the server name field be accurate in ``/etc/cobbler/settings``, without this field being
-correct, automatic installation trees will not be found, and automated installations will fail.
+It is especially important that the server name field be accurate in ``/etc/cobbler/settings.yaml``, without this field
+being correct, automatic installation trees will not be found, and automated installations will fail.
 
 For PXE, if DHCP is to be run from the cobbler server, the DHCP configuration file should be changed as suggested by
 ``cobbler check``. If DHCP is not run locally, the ``next-server`` field on the DHCP server should at minimum point to
@@ -67,12 +67,12 @@ are not interested in network booting via PXE and just want to use Koan to insta
 ones, DHCP configuration can be totally ignored. Koan also has a live CD (see Koan's manpage) capability that can be
 used to simulate PXE environments.
 
-Autoinstallation (Autoyast/Kickstart)
+Autoinstallation (AutoYaST/Kickstart)
 #####################################
 
 For help in building kickstarts, try using the ``system-config-kickstart`` tool, or install a new system and look at the
 ``/root/anaconda-ks.cfg`` file left over from the installer. General kickstart questions can also be asked at
-kickstart-list@redhat.com. Cobbler ships some autoinstall templates in /etc/cobbler that may also be helpful.
+kickstart-list@redhat.com. Cobbler ships some autoinstall templates in ``/etc/cobbler`` that may also be helpful.
 
 For AutoYaST guides and help please refer to `the opensuse project <https://doc.opensuse.org/projects/autoyast/>`_.
 
@@ -92,3 +92,9 @@ Options
 
 -l --log-level
     Choose a loglevel for the application (currently has no effect).
+
+--c --config
+    The location of the Cobbler configuration file.
+
+--disable-automigration
+    If given, do no execute automigration from older settings filles to the most recent.

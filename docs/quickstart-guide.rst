@@ -1,6 +1,6 @@
-***********************************
+**********
 Quickstart
-***********************************
+**********
 
 Cobbler can be a somewhat complex system to get started with, due to the wide variety of technologies it is designed to
 manage, but it does support a great deal of functionality immediately after installation with little to no customization
@@ -13,7 +13,7 @@ guide will focus only on the CLI application.
 
 
 Preparing your OS
-##################
+#################
 
 SELinux
 =======
@@ -29,12 +29,12 @@ TBD
 
 
 Changing settings
-##################
+#################
 
 Before starting the `cobblerd` service, there are a few things you should modify.
 
-Settings are stored in ``/etc/cobbler/settings``. This file is a YAML formatted data file, so be sure to take care when
-editing this file as an incorrectly formatted file will prevent `cobblerd` from running.
+Settings are stored in ``/etc/cobbler/settings.yaml``. This file is a YAML formatted data file, so be sure to take care
+when editing this file as an incorrectly formatted file will prevent `cobblerd` from running.
 
 
 Default encrypted password
@@ -42,14 +42,14 @@ Default encrypted password
 
 This setting controls the root password that is set for new systems during the handsoff installation.
 
-.. code-block:: none
+.. code::
 
     default_password_crypted: "$1$bfI7WLZz$PxXetL97LkScqJFxnW7KS1"
 
 You should modify this by running the following command and inserting the output into the above string (be sure to save
 the quote marks):
 
-.. code-block:: none
+.. code-block:: shell
 
     $ openssl passwd -1
 
@@ -61,14 +61,14 @@ The ``server`` option sets the IP that will be used for the address of the Cobbl
 is not the listening address. This should be set to the IP you want hosts that are being built to contact the Cobbler
 server on for such protocols as HTTP and TFTP.
 
-.. code-block:: none
+.. code::
 
     server: 127.0.0.1
 
 The ``next_server`` option is used for DHCP/PXE as the IP of the TFTP server from which network boot files are
 downloaded. Usually, this will be the same IP as the server setting.
 
-.. code-block:: none
+.. code::
 
     next_server: 127.0.0.1
 
@@ -79,20 +79,20 @@ DHCP management and DHCP server template
 In order to PXE boot, you need a DHCP server to hand out addresses and direct the booting system to the TFTP server
 where it can download the network boot files. Cobbler can manage this for you, via the ``manage_dhcp`` setting:
 
-.. code-block:: none
+.. code::
 
     manage_dhcp: 0
 
 Change that setting to 1 so Cobbler will generate the ``dhcpd.conf`` file based on the ``dhcp.template`` that is
 included with Cobbler. This template will most likely need to be modified as well, based on your network settings:
 
-.. code-block:: none
+.. code-block:: shell
 
     $ vi /etc/cobbler/dhcp.template
 
 For most uses, you'll only need to modify this block:
 
-.. code-block:: none
+.. code::
 
     subnet 192.168.1.0 netmask 255.255.255.0 {
         option routers             192.168.1.1;
@@ -101,21 +101,21 @@ For most uses, you'll only need to modify this block:
         filename                   "/pxelinux.0";
         default-lease-time         21600;
         max-lease-time             43200;
-        next-server                $next_server;
+        next-server                $next_server_v4;
     }
 
-No matter what, make sure you do not modify the ``next-server $next_server;`` line, as that is how the next_server
+No matter what, make sure you do not modify the ``next-server $next_server_v4;`` line, as that is how the next server
 setting is pulled into the configuration. This file is a cheetah template, so be sure not to modify anything starting
 after this line:
 
-.. code-block:: none
+.. code::
 
     #for dhcp_tag in $dhcp_tags.keys():
 
 Completely going through the ``dhcpd.conf`` configuration syntax is beyond the scope of this document, but for more
 information see the man page for more details:
 
-.. code-block:: none
+.. code-block:: shell
 
     $ man dhcpd.conf
 
@@ -162,7 +162,7 @@ suggestions, but it is important to remember that these are mainly only suggesti
 basic functionality. If you are running iptables or SELinux, it is important to review any messages concerning those that
 check may report.
 
-.. code-block:: none
+.. code-block:: shell
 
     $ cobbler check
     The following are potential configuration items that you may want to fix:
@@ -178,7 +178,7 @@ be sure to restart the `cobblerd` service as it suggests so the changes are appl
 Once you are done reviewing the output of ``cobbler check``, it is time to synchronize things for the first time. This
 is not critical, but a failure to properly sync at this point can reveal a configuration problem.
 
-.. code-block:: none
+.. code-block:: shell
 
     $ cobbler sync
     task started: 2012-06-24_224243_sync
@@ -231,7 +231,7 @@ In order to import a distribution, you will need a DVD ISO for your distribution
 
 Once this file is downloaded, mount it somewhere:
 
-.. code-block:: none
+.. code-block:: shell
 
     $ mount -t iso9660 -o loop,ro /path/to/isos/Fedora-17-x86_64-DVD.iso /mnt
 
@@ -241,7 +241,7 @@ Run the import
 
 You are now ready to import the distribution. The name and path arguments are the only required options for import:
 
-.. code-block:: none
+.. code-block:: shell
 
     $ cobbler import --name=fedora17 --arch=x86_64 --path=/mnt
 
@@ -255,7 +255,7 @@ Listing objects
 If no errors were reported during the import, you can view details about the distros and profiles that were created
 during the import.
 
-.. code-block:: none
+.. code-block:: shell
 
     $ cobbler distro list
     $ cobbler profile list
@@ -269,7 +269,7 @@ Object details
 
 The report command shows the details of objects in Cobbler:
 
-.. code-block:: none
+.. code-block:: shell
 
     $ cobbler distro report --name=fedora17-x86_64
     Name                            : fedora17-x86_64
@@ -310,7 +310,7 @@ do automatically for you.
 First, we'll create a system object based on the profile that was created during the import. When creating a system, the
 name and profile are the only two required fields:
 
-.. code-block:: none
+.. code-block:: shell
 
     $ cobbler system add --name=test --profile=fedora17-x86_64
     $ cobbler system list
@@ -339,7 +339,7 @@ name and profile are the only two required fields:
     Power Management Address       :
     Power Management ID            :
     Power Management Password      :
-    Power Management Type          : ipmitool
+    Power Management Type          : ipmilanplus
     Power Management Username      :
     Profile                        : fedora17-x86_64
     Proxy                          : <<inherit>>
@@ -362,13 +362,13 @@ interfaces, but with systems you can specify many more network configuration opt
 
 So now we'll setup a single, simple interface in the ``192.168.1/24`` network:
 
-.. code-block:: none
+.. code-block:: shell
 
     $ cobbler system edit --name=test --interface=eth0 --mac=00:11:22:AA:BB:CC --ip-address=192.168.1.100 --netmask=255.255.255.0 --static=1 --dns-name=test.mydomain.com
 
 The default gateway isn't specified per-NIC, so just add that separately (along with the hostname):
 
-.. code-block:: none
+.. code-block:: shell
 
     $ cobbler system edit --name=test --gateway=192.168.1.1 --hostname=test.mydomain.com
 

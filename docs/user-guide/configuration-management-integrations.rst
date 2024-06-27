@@ -1,8 +1,8 @@
 .. _configuration-management:
 
-**************************************
+*************************************
 Configuration Management Integrations
-**************************************
+*************************************
 
 Cobbler contains features for integrating an installation environment with a configuration management system, which
 handles the configuration of the system after it is installed by allowing changes to configuration files and settings.
@@ -84,13 +84,13 @@ We need to consider getting Cobbler to install and automatically invoke the CMS 
 
 Set up Cobbler to include a package repository that contains your chosen CMS:
 
-.. code-block:: none
+.. code-block:: shell
 
     cobbler repo add ...
 
 Then (illustrating a Red Hat/Puppet combination) set up the kickstart file to say something like:
 
-.. code-block:: none
+.. code::
 
     %packages
     puppet
@@ -99,7 +99,7 @@ Then (illustrating a Red Hat/Puppet combination) set up the kickstart file to sa
     /sbin/chkconfig --add puppet
 
 The detail may need to be more substantial, requiring some other associated local packages, files and configuration. You
-may wish to manage this through [Kickstart snippets](Kickstart Snippets).
+may wish to manage this through kickstart snippets.
 
 David Lutterkort has a `walkthrough for kickstart <http://watzmann.net/blog/2006/12/kickstarting-into-puppet.html>`_.
 While his example is written for Red Hat (Fedora) and Puppet, the principles are useful for other OS/CMS combinations.
@@ -111,8 +111,7 @@ Cobbler is not just an installation server, it can also enable two different typ
 system (CMS):
 
 * integration with an established external CMS such as `cfengine3 <http://cfengine.com/>`_, `bcfg2 <http://bcfg2.org>`_,
-  `Chef <http://wiki.opscode.com/display/chef/Home>`_, or `puppet <http://puppetlabs.com/>`_, discussed
-  [elsewhere](Using cobbler with a configuration management system);
+  `Chef <http://wiki.opscode.com/display/chef/Home>`_, or `puppet <http://puppetlabs.com/>`_.
 * its own, much simpler, lighter-weight, internal CMS, discussed here.
 
 Setting up
@@ -122,12 +121,12 @@ Cobbler's internal CMS is focused around packages and templated configuration fi
 systems.
 
 This all works using the same `Cheetah-powered <http://cheetahtemplate.org>`_ templating engine used in
-[Kickstart Templating](Kickstart Templating), so once you learn about the power of treating your distribution answer
+kickstart templating, so once you learn about the power of treating your distribution answer
 files as templates, you can use the same templating to drive your CMS configuration files.
 
 For example:
 
-.. code-block:: none
+.. code-block:: shell
 
     cobbler profile edit --name=webserver --template-files=/srv/cobbler/x.template=/etc/foo.conf
 
@@ -135,7 +134,7 @@ A client system installed via the above profile will gain a file ``/etc/foo.conf
 template given by ``/srv/cobbler/x.template``. Multiple files may be specified; each ``template=destination`` pair
 should be placed in a space-separated list enclosed in quotes:
 
-.. code-block:: none
+.. code-block:: shell
 
     --template-files="srv/cobbler/x.template=/etc/xfile.conf srv/cobbler/y.template=/etc/yfile.conf"
 
@@ -143,14 +142,14 @@ Template files
 ==============
 
 Because the template files will be parsed by the Cheetah parser, they must conform to the guidelines described in
-[Kickstart Templating](Kickstart Templating). This is particularly important when the file is generated outside a
+kickstart templating. This is particularly important when the file is generated outside a
 Cheetah environment. Look for, and act on, Cheetah 'ParseError' errors in the Cobbler logs.
 
 Template files follows general Cheetah syntax, so can include Cheetah variables. Any variables you define anywhere in
 the cobbler object hierarchy (distros, profiles, and systems) are available to your templates. To see all the variables
 available, use the command:
 
-.. code-block:: none
+.. code-block:: shell
 
     cobbler profile dumpvars --name=webserver
 
@@ -161,7 +160,7 @@ Ongoing maintenance
 
 Koan can pull down files to keep a system updated with the latest templates and variables:
 
-.. code-block:: none
+.. code-block:: shell
 
     koan --server=cobbler.example.org --profile=foo --update-files
 
@@ -177,7 +176,7 @@ Cobbler and Koan won't download those files.
 
 For example, in:
 
-.. code-block:: none
+.. code-block:: shell
 
     cobbler profile edit --name=foo --template-files="/srv/templates/a.src=/etc/foo/a.conf /srv/templates/b.src=1"
 
@@ -191,8 +190,8 @@ Leveraging Mod Python
 =====================
 
 All template files are generated dynamically at run-time. If a change is made to a template, a ``--ks-meta`` variable or
-some other variable in cobbler, the result of template rendering will be different on subsequent runs. This is covered
-in more depth in the [Developer documentation](Developer documentation).
+some other variable in Cobbler, the result of template rendering will be different on subsequent runs. This is covered
+in more depth in the `Developer documentation <https://github.com/cobbler/cobbler/wiki>_`.
 
 Possible future developments
 ============================
@@ -203,15 +202,19 @@ Possible future developments
 Terraform Provider
 ##################
 
-This is developed and maintained by the Terraform community. You will find more information in the docs under
-https://www.terraform.io/docs/providers/cobbler/index.html.
+This is developed and maintained by the Cobbler community. You will find more information in the docs under
+https://registry.terraform.io/providers/cobbler/cobbler/latest/docs.
 
-The code for the Terraform-Provider can be found at: https://github.com/terraform-providers/terraform-provider-cobbler
+The code for the Terraform-Provider can be found at: https://github.com/cobbler/terraform-provider-cobbler
 
 Ansible
 #######
 
-Although we currently can not provide something official we can indeed link some community work here:
+Official integration:
+
+- https://docs.ansible.com/ansible/latest/collections/community/general/cobbler_inventory.html#ansible-collections-community-general-cobbler-inventory
+
+Community provided integration:
 
 - https://github.com/ac427/my_cm
 - https://github.com/AnKosteck/ansible-cluster
@@ -249,10 +252,10 @@ Keeping Class Mappings In Cobbler
 First, we assign management classes to distro, profile, or system
 objects.
 
-.. code-block:: none
+.. code-block:: shell
 
     cobbler distro edit --name=distro1 --mgmt-classes="distro1"
-    cobbler profile add --name=webserver --distro=distro1 --mgmt-classes="webserver likes_llamas" --kickstart=/etc/cobbler/my.ks
+    cobbler profile add --name=webserver --distro=distro1 --mgmt-classes="webserver likes_llamas" --autoinstall=/etc/cobbler/my.ks
     cobbler system edit --name=system --profile=webserver --mgmt-classes="orange" --dns-name=system.example.org
 
 For Puppet, the ``--dns-name`` (shown above) must be set because this is what puppet will be sending to cobbler and is
@@ -267,14 +270,14 @@ For more documentation on Puppet's external nodes feature, see https://docs.pupp
 
 Cobbler provides one, so configure puppet to use ``/usr/bin/cobbler-ext-nodes``:
 
-.. code-block:: none
+.. code::
 
     [main]
     external_nodes = /usr/bin/cobbler-ext-nodes
 
 Note: if you are using puppet 0.24 or later then you will want to also add the following to your configuration file.
 
-.. code-block:: none
+.. code::
 
     node_terminus = exec
 
@@ -283,7 +286,7 @@ URL that always returns a YAML document in the way that Puppet expects it to be 
 parameters and classes that are to be assigned to the node in question. The magic URL being visited is powered by
 Cobbler.
 
-.. code-block:: none
+.. code::
 
     http://cobbler/cblr/svc/op/puppet/hostname/foo
 
@@ -291,7 +294,7 @@ Cobbler.
 
 And this will return data such as:
 
-.. code-block:: none
+.. code::
 
     ---
     classes:
@@ -306,9 +309,9 @@ Where do the parameters come from? Everything that cobbler tracks in ``--ks-meta
 easily add parameters as easily as you can add classes, and keep things all organized in one place.
 
 What if you have global parameters or classes to add? No problem. You can also add more classes by editing the following
-fields in ``/etc/cobbler/settings``:
+fields in ``/etc/cobbler/settings.yaml``:
 
-.. code-block:: none
+.. code::
 
     # cobbler has a feature that allows for integration with config management
     # systems such as Puppet.  The following parameters work in conjunction with
@@ -327,7 +330,7 @@ repository (at ``/etc/puppet/manifests/``) and networking information from cobbl
 the puppet side, and then looks for ``/etc/puppet/external_node.yaml`` for cobbler side configuration.
 The configuration is as follows.
 
-.. code-block:: none
+.. code::
 
     base: /etc/puppet/manifests/nodes
     cobbler: <%= cobbler_host %>

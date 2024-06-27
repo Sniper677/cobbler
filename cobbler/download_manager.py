@@ -18,21 +18,21 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
+import logging
 
 import requests
 
 
-class DownloadManager(object):
+class DownloadManager:
 
-    def __init__(self, collection_mgr, logger=None):
+    def __init__(self, api):
         """
         Constructor
 
-        :param collection_mgr: This is the current collection manager instance which holds the settings.
+        :param api: This is the current API instance which holds the settings.
         """
-        self.collection_mgr = collection_mgr
-        self.settings = collection_mgr.settings()
-        self.logger = logger
+        self.settings = api.settings()
+        self.logger = logging.getLogger()
         self.cert = ()
         if self.settings.proxy_url_ext:
             # requests wants a dict like:  protocol: proxy_uri

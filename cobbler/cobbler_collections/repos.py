@@ -17,14 +17,12 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
-
 import os.path
 
 from cobbler.cobbler_collections import collection
-from cobbler.items import repo as repo
+from cobbler.items import repo
 from cobbler import utils
 from cobbler.cexceptions import CX
-from cobbler.utils import _
 
 
 class Repos(collection.Collection):
@@ -42,48 +40,44 @@ class Repos(collection.Collection):
     def collection_types() -> str:
         return "repos"
 
-    def factory_produce(self, config, item_dict):
+    def factory_produce(self, api, item_dict):
         """
         Return a Distro forged from item_dict
         """
-        new_repo = repo.Repo(config)
+        new_repo = repo.Repo(api)
         new_repo.from_dict(item_dict)
         return new_repo
 
-    def remove(self, name, with_delete=True, with_sync=True, with_triggers=True, recursive=False, logger=None):
+    def remove(self, name, with_delete: bool = True, with_sync: bool = True, with_triggers: bool = True,
+               recursive: bool = False):
         """
         Remove element named 'name' from the collection
+
+        :raises CX: In case the object does not exist.
         """
         # NOTE: with_delete isn't currently meaningful for repos
         # but is left in for consistancy in the API.  Unused.
         name = name.lower()
         obj = self.find(name=name)
-        if obj is not None:
-            if with_delete:
-                if with_triggers:
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/delete/repo/pre/*", [], logger)
+        if obj is None:
+            raise CX("cannot delete an object that does not exist: %s" % name)
 
-            self.lock.acquire()
-            try:
-                del self.listing[name]
-            finally:
-                self.lock.release()
-            self.collection_mgr.serialize_delete(self, obj)
+        if with_delete:
+            if with_triggers:
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/delete/repo/pre/*", [])
 
-            if with_delete:
-                if with_triggers:
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/delete/repo/post/*", [], logger)
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/change/*", [], logger)
+        self.lock.acquire()
+        try:
+            del self.listing[name]
+        finally:
+            self.lock.release()
+        self.collection_mgr.serialize_delete(self, obj)
 
-                # FIXME: better use config.settings() webdir?
-                path = "/var/www/cobbler/repo_mirror/%s" % obj.name
-                if os.path.exists("/srv/www/"):
-                    path = "/srv/www/cobbler/repo_mirror/%s" % obj.name
-                if os.path.exists(path):
-                    utils.rmtree(path)
+        if with_delete:
+            if with_triggers:
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/delete/repo/post/*", [])
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/change/*", [])
 
-            return
-
-        raise CX(_("cannot delete an object that does not exist: %s") % name)
-
-# EOF
+            path = os.path.join(self.api.settings().webdir, "repo_mirror", obj.name)
+            if os.path.exists(path):
+                utils.rmtree(path)

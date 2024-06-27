@@ -6,7 +6,6 @@ import time
 import logging
 import glob as _glob
 
-from builtins import str
 from setuptools import setup
 from setuptools import Command
 from setuptools.command.install import install as _install
@@ -24,9 +23,8 @@ import pwd
 import shutil
 import subprocess
 
-from builtins import OSError
 
-VERSION = "3.2.0"
+VERSION = "3.3.2"
 OUTPUT_DIR = "config"
 
 log = logging.getLogger("setup.py")
@@ -44,9 +42,14 @@ httpd_service = os.environ.get('HTTPD_SERVICE', "apache2.service")
 webconfig = os.environ.get('WEBCONFIG', "/etc/apache2/vhosts.d")
 webroot = os.environ.get('WEBROOT', "/srv/www")
 tftproot = os.environ.get('TFTPROOT', "/srv/tftpboot")
-
-webcontent = webroot + "/cobbler_webui_content"
-webimages = webcontent + "/images"
+bind_zonefiles = os.environ.get('ZONEFILES', "/var/lib/named/")
+shim_folder = os.environ.get('SHIM_FOLDER', "/usr/share/efi/*/")
+shim_file = os.environ.get('SHIM_FILE', r"shim\.efi")
+ipxe_folder = os.environ.get('IPXE_FOLDER', '/usr/share/ipxe/')
+memdisk_folder = os.environ.get('MEMDISK_FOLDER', '/usr/share/syslinux')
+pxelinux_folder = os.environ.get('PXELINUX_FOLDER', '/usr/share/syslinux')
+syslinux_dir = os.environ.get('SYSLINUX_DIR', '/usr/share/syslinux')
+grub_mod_folder = os.environ.get('GRUB_MOD_FOLDER', '/usr/share/grub2')
 
 
 #####################################################################
@@ -76,6 +79,13 @@ def glob(*args, **kwargs):
                 results.append(elem)
     return results
 
+
+def read_readme_file():
+    # read the contents of your README file
+    this_directory = os.path.abspath(os.path.dirname(__file__))
+    with open(os.path.join(this_directory, 'README.md'), encoding='utf-8') as f:
+        return f.read()
+
 #####################################################################
 
 
@@ -95,18 +105,17 @@ def gen_build_version():
                                stdout=subprocess.PIPE)
         data = cmd.communicate()[0].strip()
         if cmd.returncode == 0:
-            gitstamp, gitdate = data.split(b"\n")
+            gitstamp, gitdate = data.decode("utf8").split("\n")
 
-    fd = open(os.path.join(OUTPUT_DIR, "version"), "w+")
-    config = ConfigParser()
-    config.add_section("cobbler")
-    config.set("cobbler", "gitdate", str(gitdate))
-    config.set("cobbler", "gitstamp", str(gitstamp))
-    config.set("cobbler", "builddate", builddate)
-    config.set("cobbler", "version", VERSION)
-    config.set("cobbler", "version_tuple", str([int(x) for x in VERSION.split(".")]))
-    config.write(fd)
-    fd.close()
+    with open(os.path.join(OUTPUT_DIR, "version"), "w+") as version_file:
+        config = ConfigParser()
+        config.add_section("cobbler")
+        config.set("cobbler", "gitdate", str(gitdate))
+        config.set("cobbler", "gitstamp", str(gitstamp))
+        config.set("cobbler", "builddate", builddate)
+        config.set("cobbler", "version", VERSION)
+        config.set("cobbler", "version_tuple", str([int(x) for x in VERSION.split(".")]))
+        config.write(version_file)
 
 #####################################################################
 # # Custom Distribution Class ########################################
@@ -333,25 +342,6 @@ class install(_install):
         if self.root is None:
             self.root = "/usr/local"
 
-        # Hand over some directories to the webserver user
-        path = os.path.join(self.install_data, 'share/cobbler/web')
-        try:
-            self.change_owner(path, http_user)
-        except Exception as e:
-            # building RPMs in a mock chroot, user 'apache' won't exist
-            log.warning("Error in 'chown apache %s': %s" % (path, e))
-        if not os.path.abspath(libpath):
-            # The next line only works for absolute libpath
-            raise Exception("libpath is not absolute.")
-        # libpath is hardcoded in the code everywhere
-        # therefor cant relocate using self.root
-        path = os.path.join(self.root + libpath, 'webui_sessions')
-        try:
-            self.change_owner(path, http_user)
-        except Exception as e:
-            # building RPMs in a mock chroot, user 'apache' won't exist
-            log.warning("Error in 'chown apache %s': %s" % (path, e))
-
 
 #####################################################################
 # # Test Command #####################################################
@@ -431,13 +421,13 @@ class restorestate(statebase):
             self.warn("%s does not exist. Skipping" % self.statepath)
             return
         self._copy(os.path.join(self.statepath, 'collections'), libpath)
-        self._copy(os.path.join(self.statepath, 'cobbler_web.conf'), webconfig)
         self._copy(os.path.join(self.statepath, 'cobbler.conf'), webconfig)
         self._copy(os.path.join(self.statepath, 'modules.conf'), etcpath)
-        self._copy(os.path.join(self.statepath, 'settings'), etcpath)
+        self._copy(os.path.join(self.statepath, 'settings.yaml'), etcpath)
         self._copy(os.path.join(self.statepath, 'users.conf'), etcpath)
         self._copy(os.path.join(self.statepath, 'users.digest'), etcpath)
         self._copy(os.path.join(self.statepath, 'dhcp.template'), etcpath)
+        self._copy(os.path.join(self.statepath, 'dhcp6.template'), etcpath)
         self._copy(os.path.join(self.statepath, 'rsync.template'), etcpath)
 
 #####################################################################
@@ -463,13 +453,13 @@ class savestate(statebase):
         if not self.dry_run:
             os.makedirs(self.statepath)
         self._copy(os.path.join(libpath, 'collections'), self.statepath)
-        self._copy(os.path.join(webconfig, 'cobbler_web.conf'), self.statepath)
         self._copy(os.path.join(webconfig, 'cobbler.conf'), self.statepath)
         self._copy(os.path.join(etcpath, 'modules.conf'), self.statepath)
-        self._copy(os.path.join(etcpath, 'settings'), self.statepath)
+        self._copy(os.path.join(etcpath, 'settings.yaml'), self.statepath)
         self._copy(os.path.join(etcpath, 'users.conf'), self.statepath)
         self._copy(os.path.join(etcpath, 'users.digest'), self.statepath)
         self._copy(os.path.join(etcpath, 'dhcp.template'), self.statepath)
+        self._copy(os.path.join(etcpath, 'dhcp6.template'), self.statepath)
         self._copy(os.path.join(etcpath, 'rsync.template'), self.statepath)
 
 
@@ -479,7 +469,6 @@ class savestate(statebase):
 
 
 if __name__ == "__main__":
-
     setup(
         distclass=Distribution,
         cmdclass={
@@ -495,15 +484,17 @@ if __name__ == "__main__":
         name="cobbler",
         version=VERSION,
         description="Network Boot and Update Server",
-        long_description="Cobbler is a network install server. Cobbler supports PXE, virtualized installs, "
-                         "and reinstalling existing Linux machines. The last two modes use a helper tool, 'koan', "
-                         "that integrates with cobbler. There is also a web interface 'cobbler-web'. Cobbler's "
-                         "advanced features include importing distributions from DVDs and rsync mirrors, automatic OS "
-                         "installation templating, integrated yum mirroring, and built-in DHCP/DNS Management. "
-                         "Cobbler has a XMLRPC API for integration with other applications.",
+        long_description=read_readme_file(),
+        long_description_content_type='text/markdown',
         author="Team Cobbler",
         author_email="cobbler.project@gmail.com",
-        url="https://cobbler.github.io",
+        project_urls={
+            'Website': 'https://cobbler.github.io',
+            'Documentation (Users)': 'https://cobbler.readthedocs.io/en/latest',
+            'Documentation (Devs)': 'https://github.com/cobbler/cobbler/wiki',
+            'Source': 'https://github.com/cobbler/cobbler',
+            'Tracker': 'https://github.com/cobbler/cobbler/issues'
+        },
         license="GPLv2+",
         setup_requires=[
             "coverage",
@@ -515,33 +506,46 @@ if __name__ == "__main__":
             "mod_wsgi",
             "requests",
             "pyyaml",
-            "simplejson",
             "netaddr",
             "Cheetah3",
-            "Django",
             "pymongo",
             "distro",
-            "ldap3",
+            "python-ldap",
             "dnspython",
-            "tornado",
+            "file-magic",
+            "schema"
         ],
-        extras_require={"lint": ["pyflakes", "pycodestyle"], "test": ["pytest", "pytest-cov", "codecov"]},
+        extras_require={
+            "lint": ["pyflakes", "pycodestyle"],
+            "test": ["pytest", "pytest-cov", "codecov", "pytest-mock"]
+        },
         packages=find_packages(exclude=["*tests*"]),
         scripts=[
             "bin/cobbler",
             "bin/cobblerd",
             "bin/cobbler-ext-nodes",
+            "bin/cobbler-settings"
         ],
         configure_values={
             'webroot': os.path.normpath(webroot),
             'tftproot': os.path.normpath(tftproot),
             'httpd_service': httpd_service,
+            'bind_zonefiles': bind_zonefiles,
+            'shim_folder': shim_folder,
+            'shim_file': shim_file,
+            'ipxe_folder': ipxe_folder,
+            'memdisk_folder': memdisk_folder,
+            'pxelinux_folder': pxelinux_folder,
+            'syslinux_dir': syslinux_dir,
+            'grub_mod_folder': grub_mod_folder
         },
         configure_files=[
-            "config/cobbler/settings",
+            "cobbler/settings/migrations/V3_3_1.py",
             "config/apache/cobbler.conf",
-            "config/apache/cobbler_web.conf",
+            "config/cobbler/settings.yaml",
             "config/service/cobblerd.service",
+            "templates/etc/named.template",
+            "templates/etc/secondary.template",
         ],
         man_pages=[
             'docs/cobblerd.rst',
@@ -549,29 +553,19 @@ if __name__ == "__main__":
             'docs/cobbler.rst'
         ],
         data_files=[
-            # tftpd, hide in /usr/sbin
-            ("sbin", ["bin/tftpd.py"]),
-            ("sbin", ["bin/fence_ipmitool"]),
             ("%s" % webconfig, ["build/config/apache/cobbler.conf"]),
-            ("%s" % webconfig, ["build/config/apache/cobbler_web.conf"]),
             ("%s/templates" % libpath, glob("autoinstall_templates/*")),
             ("%s/templates/install_profiles" % libpath, glob("autoinstall_templates/install_profiles/*")),
             ("%s/snippets" % libpath, glob("autoinstall_snippets/*", recursive=True)),
             ("%s/scripts" % libpath, glob("autoinstall_scripts/*")),
             ("%s" % libpath, ["config/cobbler/distro_signatures.json"]),
-            ("share/cobbler/web", glob("web/*.*")),
-            ("%s" % webcontent, glob("web/static/*")),
-            ("%s" % webimages, glob("web/static/images/*")),
-            ("share/cobbler/bin", glob("scripts/*.sh")),
-            ("share/cobbler/web/templates", glob("web/templates/*")),
-            ("%s/webui_sessions" % libpath, []),
+            ("share/cobbler/bin", glob("scripts/*")),
             ("%s/loaders" % libpath, []),
             ("%s/cobbler/misc" % webroot, glob("misc/*")),
             # Configuration
             ("%s" % etcpath, ["build/config/apache/cobbler.conf",
-                              "build/config/apache/cobbler_web.conf",
                               "build/config/service/cobblerd.service",
-                              "build/config/cobbler/settings"]),
+                              "build/config/cobbler/settings.yaml"]),
             ("%s/settings.d" % etcpath, glob("config/cobbler/settings.d/*")),
             ("%s" % etcpath, ["config/cobbler/auth.conf",
                               "config/cobbler/modules.conf",
@@ -591,6 +585,7 @@ if __name__ == "__main__":
                               "templates/etc/dnsmasq.template",
                               "templates/etc/rsync.template",
                               "templates/etc/dhcp.template",
+                              "templates/etc/dhcp6.template",
                               "templates/etc/ndjbdns.template"]),
             ("%s/iso" % etcpath, glob("templates/iso/*")),
             ("%s/boot_loader_conf" % etcpath, glob("templates/boot_loader_conf/*")),
@@ -609,6 +604,7 @@ if __name__ == "__main__":
             ("%s/ppc" % tftproot, []),
             ("%s/s390x" % tftproot, []),
             ("%s/pxelinux.cfg" % tftproot, []),
+            ("%s/ipxe" % tftproot, []),
             ("%s/grub/system" % tftproot, []),
             ("%s/grub/system_link" % tftproot, []),
             ("%s/grub_config/grub/system" % libpath, []),
@@ -629,6 +625,8 @@ if __name__ == "__main__":
             ("%s/triggers/add/package/post" % libpath, []),
             ("%s/triggers/add/file/pre" % libpath, []),
             ("%s/triggers/add/file/post" % libpath, []),
+            ("%s/triggers/add/menu/pre" % libpath, []),
+            ("%s/triggers/add/menu/post" % libpath, []),
             ("%s/triggers/delete/distro/pre" % libpath, []),
             ("%s/triggers/delete/distro/post" % libpath, []),
             ("%s/triggers/delete/profile/pre" % libpath, []),
@@ -643,6 +641,8 @@ if __name__ == "__main__":
             ("%s/triggers/delete/package/post" % libpath, []),
             ("%s/triggers/delete/file/pre" % libpath, []),
             ("%s/triggers/delete/file/post" % libpath, []),
+            ("%s/triggers/delete/menu/pre" % libpath, []),
+            ("%s/triggers/delete/menu/post" % libpath, []),
             ("%s/triggers/install/pre" % libpath, []),
             ("%s/triggers/install/post" % libpath, []),
             ("%s/triggers/install/firstboot" % libpath, []),
@@ -663,6 +663,8 @@ if __name__ == "__main__":
             ("%s/triggers/task/package/post" % libpath, []),
             ("%s/triggers/task/file/pre" % libpath, []),
             ("%s/triggers/task/file/post" % libpath, []),
+            ("%s/triggers/task/menu/pre" % libpath, []),
+            ("%s/triggers/task/menu/post" % libpath, []),
             # Build empty directories to hold the database
             ("%s/collections" % libpath, []),
             ("%s/collections/distros" % libpath, []),
@@ -673,6 +675,7 @@ if __name__ == "__main__":
             ("%s/collections/mgmtclasses" % libpath, []),
             ("%s/collections/packages" % libpath, []),
             ("%s/collections/files" % libpath, []),
+            ("%s/collections/menus" % libpath, []),
             # logfiles
             ("%s/cobbler/kicklog" % logpath, []),
             ("%s/cobbler/syslog" % logpath, []),
@@ -691,10 +694,10 @@ if __name__ == "__main__":
             ("%s/cobbler/images" % webroot, []),
             # A script that isn't really data, wsgi script
             ("%s/cobbler/svc/" % webroot, ["svc/services.py"]),
-            # A script that isn't really data, wsgi script
-            ("share/cobbler/web/", ["cobbler/web/settings.py"]),
             # zone-specific templates directory
             ("%s/zone_templates" % etcpath, glob("templates/zone_templates/*")),
+            # windows-specific templates directory
+            ("%s/windows" % etcpath, glob("templates/windows/*")),
             ("%s" % etcpath, ["config/cobbler/logging_config.conf"]),
             # man pages
             ("%s/man1" % docpath, glob("build/sphinx/man/*.1")),
@@ -704,7 +707,6 @@ if __name__ == "__main__":
             ("%s/tests/cli" % datadir, glob("tests/cli/*.py")),
             ("%s/tests/modules" % datadir, glob("tests/modules/*.py")),
             ("%s/tests/modules/authentication" % datadir, glob("tests/modules/authentication/*.py")),
-            ("%s/tests/views" % datadir, glob("tests/views/*.py")),
             ("%s/tests/xmlrpcapi" % datadir, glob("tests/xmlrpcapi/*.py")),
         ],
     )

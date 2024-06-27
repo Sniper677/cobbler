@@ -1,81 +1,149 @@
 import os
 import shutil
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
+from cobbler.api import CobblerAPI
 
-def pytest_addoption(parser):
-    parser.addoption("-E", action="store", metavar="NAME", help="only run tests matching the environment NAME.")
-
-
-def pytest_configure(config):
-    # register an additional marker
-    config.addinivalue_line("markers", "env(name): mark test to run only on named environment")
 
 @contextmanager
 def does_not_raise():
     yield
 
 
-@pytest.fixture(scope="session")
-def file_basedir():
-    """
-    This is the base-directory for fake files which are needed for the test. The advantage of the location under
-    ``/dev/shm`` is that it get's wiped per default after a reboot of the system.
-
-    :return: ``/dev/shm/cobbler_test``
-    """
-    return "/dev/shm/cobbler_test"
+@pytest.fixture(scope="function")
+def cobbler_api():
+    CobblerAPI.__shared_state = {}
+    CobblerAPI.__has_loaded = False
+    return CobblerAPI()
 
 
-@pytest.fixture(scope="session", autouse=True)
-def create_file_basedir(file_basedir):
-    """
-    This creates the directory needed for the cobbler tests.
-
-    :param file_basedir: See the corresponding fixture.
-    """
-    if not os.path.exists(file_basedir):
-        os.makedirs(file_basedir)
+@pytest.fixture(scope="function", autouse=True)
+def reset_settings_yaml(tmp_path):
+    filename = "settings.yaml"
+    filepath = "/etc/cobbler/%s" % filename
+    shutil.copy(filepath, tmp_path.joinpath(filename))
+    yield
+    shutil.copy(tmp_path.joinpath(filename), filepath)
 
 
-@pytest.fixture(scope="session", autouse=True)
-def delete_file_basedir(file_basedir):
-    if os.path.exists(file_basedir):
-        shutil.rmtree(file_basedir)
-
-
-@pytest.fixture()
-def create_testfile(file_basedir):
+@pytest.fixture(scope="function")
+def create_testfile(tmp_path):
     def _create_testfile(filename):
-        path = os.path.join(file_basedir, filename)
+        path = os.path.join(tmp_path, filename)
         if not os.path.exists(path):
-            f = open(path, "w+")
-            f.close()
+            Path(path).touch()
+        return path
     return _create_testfile
 
 
-@pytest.fixture()
-def delete_testfile(file_basedir):
-    def _delete_testfile(filename):
-        path = os.path.join(file_basedir, filename)
-        if os.path.exists(path):
-            os.remove(path)
-    return _delete_testfile
-
-
-@pytest.fixture()
-def create_kernel_initrd(create_file_basedir, file_basedir, create_testfile):
+@pytest.fixture(scope="function")
+def create_kernel_initrd(create_testfile):
     def _create_kernel_initrd(name_kernel, name_initrd):
         create_testfile(name_kernel)
-        create_testfile(name_initrd)
+        return os.path.dirname(create_testfile(name_initrd))
     return _create_kernel_initrd
 
 
-@pytest.fixture()
-def delete_kernel_initrd(file_basedir, delete_testfile):
-    def _delete_kernel_initrd(name_kernel, name_initrd):
-        delete_testfile(name_kernel)
-        delete_testfile(name_initrd)
-    return _delete_kernel_initrd
+@pytest.fixture(scope="function", autouse=True)
+def cleanup_leftover_items():
+    """
+    Will delete all JSON files which are left in Cobbler before a testrun!
+    """
+    cobbler_collections = ["distros", "files", "images", "menus", "mgmtclasses", "packages", "profiles", "repos",
+                           "systems"]
+    for collection in cobbler_collections:
+        path = os.path.join("/var/lib/cobbler/collections", collection)
+        for file in os.listdir(path):
+            json_file = os.path.join(path, file)
+            os.remove(json_file)
+
+
+@pytest.fixture(scope="function")
+def fk_initrd():
+    """
+    The path to the first fake initrd.
+
+    :return: A filename as a string.
+    """
+    return "initrd1.img"
+
+
+@pytest.fixture(scope="function")
+def fk_initrd2():
+    """
+    The path to the second fake initrd.
+
+    :return: A filename as a string.
+    """
+    return "initrd2.img"
+
+
+@pytest.fixture(scope="function")
+def fk_initrd3():
+    """
+    The path to the third fake initrd.
+
+    :return: A path as a string.
+    """
+    return "initrd3.img"
+
+
+@pytest.fixture(scope="function")
+def fk_kernel():
+    """
+    The path to the first fake kernel.
+
+    :return: A path as a string.
+    """
+    return "vmlinuz1"
+
+
+@pytest.fixture(scope="function")
+def fk_kernel2():
+    """
+    The path to the second fake kernel.
+
+    :return: A path as a string.
+    """
+    return "vmlinuz2"
+
+
+@pytest.fixture(scope="function")
+def fk_kernel3():
+    """
+    The path to the third fake kernel.
+
+    :return: A path as a string.
+    """
+    return "vmlinuz3"
+
+
+@pytest.fixture(scope="function")
+def redhat_autoinstall():
+    """
+    The path to the test.ks file for redhat autoinstall.
+
+    :return: A path as a string.
+    """
+    return "test.ks"
+
+
+@pytest.fixture(scope="function")
+def suse_autoyast():
+    """
+    The path to the suse autoyast xml-file.
+    :return: A path as a string.
+    """
+    return "test.xml"
+
+
+@pytest.fixture(scope="function")
+def ubuntu_preseed():
+    """
+    The path to the ubuntu preseed file.
+    :return: A path as a string.
+    """
+    return "test.seed"

@@ -1,8 +1,9 @@
+Sphinx>4
 netaddr
 Cheetah3
-django
-simplejson
 dnspython
 pyyaml
 distro
 sphinx_rtd_theme
+file-magic
+schema

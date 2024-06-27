@@ -14,38 +14,30 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA.
 """
-
-from builtins import str
-from builtins import object
 import re
+from typing import Optional
 
-from cobbler import clogger
 from cobbler import utils
 
 
-class Report(object):
+class Report:
 
-    def __init__(self, collection_mgr, logger=None):
+    def __init__(self, api):
         """
         Constructor
 
-        :param collection_mgr: The collection manager to hold all information in Cobbler available.
-        :param logger: The logger to audit all action with.
+        :param api: The API to hold all information in Cobbler available.
         """
-        self.collection_mgr = collection_mgr
-        self.settings = collection_mgr.settings()
-        self.api = collection_mgr.api
+        self.settings = api.settings()
+        self.api = api
         self.report_type = None
         self.report_what = None
         self.report_name = None
         self.report_fields = None
         self.report_noheaders = None
         self.array_re = re.compile(r'([^[]+)\[([^]]+)\]')
-        if logger is None:
-            logger = clogger.Logger()
-        self.logger = logger
 
-    def fielder(self, structure, fields_list):
+    def fielder(self, structure: dict, fields_list: list):
         """
         Return data from a subset of fields of some item
 
@@ -73,7 +65,7 @@ class Report(object):
                         item[field] = device + ': ' + structure['interfaces'][device][field]
         return item
 
-    def reporting_csv(self, info, order, noheaders):
+    def reporting_csv(self, info, order: list, noheaders: bool) -> str:
         """
         Formats data on 'info' for csv output
 
@@ -112,7 +104,7 @@ class Report(object):
 
         return outputheaders + outputbody
 
-    def reporting_trac(self, info, order, noheaders):
+    def reporting_trac(self, info, order: list, noheaders: bool) -> str:
         """
         Formats data on 'info' for trac wiki table output
 
@@ -151,7 +143,7 @@ class Report(object):
 
         return outputheaders + outputbody
 
-    def reporting_doku(self, info, order, noheaders):
+    def reporting_doku(self, info, order: list, noheaders: bool) -> str:
         """
         Formats data on 'info' for doku wiki table output
 
@@ -191,7 +183,7 @@ class Report(object):
 
         return outputheaders + outputbody
 
-    def reporting_mediawiki(self, info, order, noheaders):
+    def reporting_mediawiki(self, info, order: list, noheaders: bool) -> str:
         """
         Formats data on 'info' for mediawiki table output
 
@@ -242,7 +234,7 @@ class Report(object):
 
         return opentable + outputheaders + outputbody + closetable
 
-    def print_formatted_data(self, data, order, report_type, noheaders):
+    def print_formatted_data(self, data, order: list, report_type: str, noheaders: bool):
         """
         Used for picking the correct format to output data as
 
@@ -252,13 +244,13 @@ class Report(object):
         :param report_type: The type of report which should be used.
         """
         if report_type == "csv":
-            self.logger.flat(self.reporting_csv(data, order, noheaders))
+            print(self.reporting_csv(data, order, noheaders))
         if report_type == "mediawiki":
-            self.logger.flat(self.reporting_mediawiki(data, order, noheaders))
+            print(self.reporting_mediawiki(data, order, noheaders))
         if report_type == "trac":
-            self.logger.flat(self.reporting_trac(data, order, noheaders))
+            print(self.reporting_trac(data, order, noheaders))
         if report_type == "doku":
-            self.logger.flat(self.reporting_doku(data, order, noheaders))
+            print(self.reporting_doku(data, order, noheaders))
 
     def reporting_print_sorted(self, collection):
         """
@@ -269,9 +261,9 @@ class Report(object):
         collection = [x for x in collection]
         collection.sort(key=lambda x: x.name)
         for x in collection:
-            self.logger.flat(x.to_string())
+            print(x.to_string())
 
-    def reporting_list_names2(self, collection, name):
+    def reporting_list_names2(self, collection, name: str):
         """
         Prints a specific object in a collection.
 
@@ -280,9 +272,9 @@ class Report(object):
         """
         obj = collection.get(name)
         if obj is not None:
-            self.logger.flat(obj.to_string())
+            print(obj.to_string())
 
-    def reporting_print_all_fields(self, collection, report_name, report_type, report_noheaders):
+    def reporting_print_all_fields(self, collection, report_name: str, report_type: str, report_noheaders: bool) -> str:
         """
         Prints all fields in a collection as a table given the report type
 
@@ -298,7 +290,7 @@ class Report(object):
             if collection:
                 collection = [collection]
             else:
-                return
+                return ""
 
         collection = [x for x in collection]
         collection.sort(key=lambda x: x.name)
@@ -333,7 +325,8 @@ class Report(object):
 
         self.print_formatted_data(data=data, order=out_order, report_type=report_type, noheaders=report_noheaders)
 
-    def reporting_print_x_fields(self, collection, report_name, report_type, report_fields, report_noheaders):
+    def reporting_print_x_fields(self, collection, report_name: str, report_type: str, report_fields: str,
+                                 report_noheaders: bool):
         """
         Prints specific fields in a collection as a table given the report type
 
@@ -368,7 +361,9 @@ class Report(object):
 
     # -------------------------------------------------------
 
-    def run(self, report_what=None, report_name=None, report_type=None, report_fields=None, report_noheaders=None):
+    def run(self, report_what: Optional[str] = None, report_name: Optional[str] = None,
+            report_type: Optional[str] = None, report_fields: Optional[str] = None,
+            report_noheaders: Optional[bool] = None):
         """
         Get remote profiles and distros and sync them locally
 
@@ -383,22 +378,30 @@ class Report(object):
         :param report_noheaders: Report without the headers. (May be useful for machine parsing)
         """
         if report_type == 'text' and report_fields == 'all':
-            for collection_name in ["distro", "profile", "system", "repo", "network", "image", "mgmtclass", "package", "file"]:
-                if report_what == "all" or report_what == collection_name or report_what == "%ss" % collection_name or report_what == "%ses" % collection_name:
+            for collection_name in ["distro", "profile", "system", "repo", "network", "image", "mgmtclass", "package",
+                                    "file"]:
+                if report_what == "all" or report_what == collection_name or report_what == "%ss" % collection_name \
+                        or report_what == "%ses" % collection_name:
                     if report_name:
                         self.reporting_list_names2(self.api.get_items(collection_name), report_name)
                     else:
                         self.reporting_print_sorted(self.api.get_items(collection_name))
 
         elif report_type == 'text' and report_fields != 'all':
-            utils.die(self.logger, "The 'text' type can only be used with field set to 'all'")
+            utils.die("The 'text' type can only be used with field set to 'all'")
 
         elif report_type != 'text' and report_fields == 'all':
-            for collection_name in ["distro", "profile", "system", "repo", "network", "image", "mgmtclass", "package", "file"]:
-                if report_what == "all" or report_what == collection_name or report_what == "%ss" % collection_name or report_what == "%ses" % collection_name:
-                    self.reporting_print_all_fields(self.api.get_items(collection_name), report_name, report_type, report_noheaders)
+            for collection_name in ["distro", "profile", "system", "repo", "network", "image", "mgmtclass", "package",
+                                    "file"]:
+                if report_what == "all" or report_what == collection_name or report_what == "%ss" % collection_name \
+                        or report_what == "%ses" % collection_name:
+                    self.reporting_print_all_fields(self.api.get_items(collection_name), report_name, report_type,
+                                                    report_noheaders)
 
         else:
-            for collection_name in ["distro", "profile", "system", "repo", "network", "image", "mgmtclass", "package", "file"]:
-                if report_what == "all" or report_what == collection_name or report_what == "%ss" % collection_name or report_what == "%ses" % collection_name:
-                    self.reporting_print_x_fields(self.api.get_items(collection_name), report_name, report_type, report_fields, report_noheaders)
+            for collection_name in ["distro", "profile", "system", "repo", "network", "image", "mgmtclass", "package",
+                                    "file"]:
+                if report_what == "all" or report_what == collection_name or report_what == "%ss" % collection_name \
+                        or report_what == "%ses" % collection_name:
+                    self.reporting_print_x_fields(self.api.get_items(collection_name), report_name, report_type,
+                                                  report_fields, report_noheaders)

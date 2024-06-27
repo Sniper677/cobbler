@@ -24,35 +24,33 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 """
 
 
-from builtins import str
 from configparser import ConfigParser
 
 import os
+from typing import Dict, Union
 
 from cobbler.cexceptions import CX
-from cobbler.utils import _
 
 
-def register():
+def register() -> str:
     """
     The mandatory Cobbler module registration hook.
 
     :return: Always "authz"
-    :rtype: str
     """
     return "authz"
 
 
-def __parse_config():
+def __parse_config() -> Dict[str, dict]:
     """
     Parse the "users.conf" of Cobbler and return all data in a dictionary.
 
-    :return: The data seperated by sections. Each section has a subdictionary with the key-value pairs.
-    :rtype: dict
+    :return: The data separated by sections. Each section has a subdictionary with the key-value pairs.
+    :raises FileNotFoundError
     """
     etcfile = '/etc/cobbler/users.conf'
     if not os.path.exists(etcfile):
-        raise CX(_("/etc/cobbler/users.conf does not exist"))
+        raise FileNotFoundError("/etc/cobbler/users.conf does not exist")
     # Make users case sensitive to handle kerberos
     config = ConfigParser()
     config.optionxform = str
@@ -67,7 +65,7 @@ def __parse_config():
     return alldata
 
 
-def __authorize_autoinst(api_handle, groups, user, autoinst):
+def __authorize_autoinst(api_handle, groups, user, autoinst) -> int:
     """
     The authorization rules for automatic installation file editing are a bit of a special case. Non-admin users can
     edit a automatic installation file only if all objects that depend on that automatic installation file are editable
@@ -100,7 +98,7 @@ def __authorize_autoinst(api_handle, groups, user, autoinst):
     return 1
 
 
-def __authorize_snippet(api_handle, groups, user, autoinst):
+def __authorize_snippet(api_handle, groups, user, autoinst) -> bool:
     """
     Only allow admins to edit snippets -- since we don't have detection to see where each snippet is in use.
 
@@ -117,7 +115,7 @@ def __authorize_snippet(api_handle, groups, user, autoinst):
     return True
 
 
-def __is_user_allowed(obj, groups, user, resource, arg1, arg2):
+def __is_user_allowed(obj, groups, user, resource, arg1, arg2) -> Union[int, bool]:
     """
     Check if a user is allowed to access the resource in question.
 
@@ -149,7 +147,7 @@ def __is_user_allowed(obj, groups, user, resource, arg1, arg2):
     return 0
 
 
-def authorize(api_handle, user, resource, arg1=None, arg2=None):
+def authorize(api_handle, user: str, resource: str, arg1=None, arg2=None) -> Union[bool, int]:
     """
     Validate a user against a resource. All users in the file are permitted by this module.
 

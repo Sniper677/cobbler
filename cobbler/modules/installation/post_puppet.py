@@ -4,14 +4,16 @@ puppet master server is running on the same machine as the Cobbler
 server.
 
 Based on:
-http://www.ithiriel.com/content/2010/03/29/writing-install-triggers-cobbler
+https://www.ithiriel.com/content/2010/03/29/writing-install-triggers-cobbler
 """
-from builtins import str
+import logging
 import re
 import cobbler.utils as utils
 
+logger = logging.getLogger()
 
-def register():
+
+def register() -> str:
     """
     The mandatory Cobbler module registration hook.
     """
@@ -20,51 +22,47 @@ def register():
     return "/var/lib/cobbler/triggers/install/post/*"
 
 
-def run(api, args, logger):
+def run(api, args) -> int:
     """
     The obligatory Cobbler modules hook.
 
     :param api: The api to resolve all information with.
-    :param args: This is an array with two items. The first may be ``system`` or ``profile`` and the second is the name
-                 of this system or profile.
-    :param logger: The logger to audit all actions with.
+    :param args: This is an array with two items. The first must be ``system``, if the value is different we do an
+                 early and the second is the name of this system or profile.
     :return: ``0`` or nothing.
     """
     objtype = args[0]
     name = args[1]
-    # ip = args[2]          # ip or "?"
 
     if objtype != "system":
         return 0
 
     settings = api.settings()
 
-    if not str(settings.puppet_auto_setup).lower() in ["1", "yes", "y", "true"]:
+    if not settings.puppet_auto_setup:
         return 0
 
-    if not str(settings.sign_puppet_certs_automatically).lower() in ["1", "yes", "y", "true"]:
+    if not settings.sign_puppet_certs_automatically:
         return 0
 
     system = api.find_system(name)
     system = utils.blender(api, False, system)
     hostname = system["hostname"]
-    if not re.match(r'[\w-]+\..+', hostname):
-        search_domains = system['name_servers_search']
+    if not re.match(r"[\w-]+\..+", hostname):
+        search_domains = system["name_servers_search"]
         if search_domains:
-            hostname += '.' + search_domains[0]
+            hostname += "." + search_domains[0]
     puppetca_path = settings.puppetca_path
-    cmd = [puppetca_path, 'cert', 'sign', hostname]
+    cmd = [puppetca_path, "cert", "sign", hostname]
 
     rc = 0
 
     try:
-        rc = utils.subprocess_call(logger, cmd, shell=False)
+        rc = utils.subprocess_call(cmd, shell=False)
     except:
-        if logger is not None:
-            logger.warning("failed to execute %s" % puppetca_path)
+        logger.warning("failed to execute %s", puppetca_path)
 
     if rc != 0:
-        if logger is not None:
-            logger.warning("signing of puppet cert for %s failed" % name)
+        logger.warning("signing of puppet cert for %s failed", name)
 
     return 0

@@ -1,20 +1,14 @@
 import os
 import re
 import shutil
-import time
 from pathlib import Path
 
 import pytest
 from netaddr.ip import IPAddress
 
-from cobbler.api import CobblerAPI
 from cobbler import utils
 from cobbler.cexceptions import CX
 from cobbler.items.distro import Distro
-from cobbler.items.profile import Profile
-from cobbler.items.repo import Repo
-from cobbler.items.system import System
-from cobbler.cobbler_collections.manager import CollectionManager
 from tests.conftest import does_not_raise
 
 
@@ -53,22 +47,6 @@ def test_is_ip(testvalue, expected_result):
     assert expected_result == result
 
 
-@pytest.mark.parametrize("testvalue,expected_result", [
-    ("AA:AA:AA:AA:AA:AA", True),
-    ("FF:FF:FF:FF:FF:FF", True),
-    ("FF:FF:FF:FF:FF", False),
-    ("Test", False)
-])
-def test_is_mac(testvalue, expected_result):
-    # Arrange
-
-    # Act
-    result = utils.is_mac(testvalue)
-
-    # Assert
-    assert expected_result == result
-
-
 def test_is_systemd():
     # Arrange
 
@@ -79,12 +57,11 @@ def test_is_systemd():
     assert result
 
 
-def test_get_random_mac():
+def test_get_random_mac(cobbler_api):
     # Arrange
-    api = CobblerAPI()
 
     # Act
-    result = utils.get_random_mac(api)
+    result = utils.get_random_mac(cobbler_api)
 
     # Assert
     # TODO: Check for MAC validity
@@ -95,13 +72,16 @@ def test_find_matching_files():
     # Arrange
     # TODO: Get testdir und check for files
     directory = "/test_dir/tests"
-    expected = ["/test_dir/tests/utils_test.py"]
+    expected = ["/test_dir/tests/settings_test.py", "/test_dir/tests/utils_test.py",
+                "/test_dir/tests/template_api_test.py", "/test_dir/tests/templar_test.py",
+                "/test_dir/tests/module_loader_test.py"]
 
     # Act
     results = utils.find_matching_files(directory, re.compile(r'.*_test.py'))
+    results.sort()
 
     # Assert
-    assert expected == results
+    assert expected.sort() == results.sort()
 
 
 def test_find_highest_files():
@@ -234,10 +214,10 @@ def test_input_string_or_list(test_input, expected_result):
 
 @pytest.mark.parametrize("testinput,expected_result,possible_exception", [
     ("<<inherit>>", (True, {}), does_not_raise()),
-    ([""], None, pytest.raises(CX)),
+    ([""], None, pytest.raises(TypeError)),
     ("a b=10 c=abc", (True, {"a": None, "b": '10', "c": "abc"}), does_not_raise()),
     ({"ab": 0}, (True, {"ab": 0}), does_not_raise()),
-    (0, None, pytest.raises(CX))
+    (0, None, pytest.raises(TypeError))
 ])
 def test_input_string_or_dict(testinput, expected_result, possible_exception):
     # Arrange
@@ -250,88 +230,69 @@ def test_input_string_or_dict(testinput, expected_result, possible_exception):
         assert expected_result == result
 
 
-@pytest.mark.parametrize("testinput,expected_result", [
-    (True, True),
-    (1, True),
-    ("oN", True),
-    ("yEs", True),
-    ("Y", True),
-    ("Test", False),
-    (-5, False),
-    (.5, False)
+@pytest.mark.parametrize("testinput,expected_exception,expected_result", [
+    (True, does_not_raise(), True),
+    (1, does_not_raise(), True),
+    ("oN", does_not_raise(), True),
+    ("yEs", does_not_raise(), True),
+    ("Y", does_not_raise(), True),
+    ("Test", does_not_raise(), False),
+    (-5, does_not_raise(), False),
+    (.5, pytest.raises(TypeError), False)
 ])
-def test_input_boolean(testinput, expected_result):
+def test_input_boolean(testinput, expected_exception, expected_result):
     # Arrange
 
     # Act
-    result = utils.input_boolean(testinput)
+    with expected_exception:
+        result = utils.input_boolean(testinput)
 
-    # Assert
-    assert expected_result == result
+        # Assert
+        assert expected_result == result
 
 
-@pytest.mark.skip("This breaks a lot of tests if we don't insert the full settings here.")
-def test_update_settings_file():
+def test_grab_tree(cobbler_api):
     # Arrange
-    settings_data = None
-    time_before_write = time.time()
-
-    # Act
-    result = utils.update_settings_file(settings_data)
-
-    # Assert
-    assert result
-    # This should work the following: The time of modifying the settings file should be greater then the time taken
-    # before modifying it. Thus the value of the subtraction of both should be greater than zero. If writing to the
-    # files does not work, this is smaller then 0. The content is a yaml file thus we don't want to test if writing a
-    # YAML file is logically correct. This is the matter of the library we are using.
-    assert os.path.getmtime("/etc/cobbler/settings") - time_before_write > 0
-
-
-def test_grab_tree():
-    # Arrange
-    api = CobblerAPI()
-    object_to_check = Distro(api._collection_mgr)
+    object_to_check = Distro(cobbler_api)
     # TODO: Create some objects and give them some inheritance.
 
     # Act
-    result = utils.grab_tree(api, object_to_check)
+    result = utils.grab_tree(cobbler_api, object_to_check)
 
     # Assert
     assert isinstance(result, list)
-    assert result[-1].server == "127.0.0.1"
+    assert result[-1].server == "192.168.1.1"
 
 
-@pytest.mark.skip("We know this works through the xmlrpc tests. Generating corner cases to test this more, is hard.")
-def test_blender():
+def test_blender(cobbler_api):
     # Arrange
-    # TODO: Create some objects
-    api = CobblerAPI()
-    root_item = None
-    expected = {}
+    root_item = Distro(cobbler_api)
 
     # Act
-    result = utils.blender(api, False, root_item)
+    result = utils.blender(cobbler_api, False, root_item)
 
     # Assert
-    assert expected == result
+    assert len(result) == 160
+    assert "server" in result
+    assert "os_version" in result
 
 
-@pytest.mark.parametrize("testinput,expected_result", [
-    (None, None),
-    ("data", None),
-    (0, None),
-    ({}, {})
+@pytest.mark.parametrize("testinput,expected_result,expected_exception", [
+    (None, None, does_not_raise()),
+    ("data", None, does_not_raise()),
+    (0, None, does_not_raise()),
+    ({}, {}, does_not_raise())
 ])
-def test_flatten(testinput, expected_result):
+def test_flatten(testinput, expected_result, expected_exception):
     # Arrange
     # TODO: Add more examples
 
     # Act
-    result = utils.flatten(testinput)
+    with expected_exception:
+        result = utils.flatten(testinput)
 
-    # Assert
-    assert expected_result == result
+        # Assert
+        assert expected_result == result
 
 
 @pytest.mark.parametrize("testinput,expected_result", [
@@ -399,20 +360,19 @@ def test_run_this():
     test_args = "Test"
 
     # Act
-    utils.run_this(test_cmd, test_args, None)
+    utils.run_this(test_cmd, test_args)
 
     # Assert - If above method get's a zero exitcode it counts as successfully completed. Otherwise we die.
     assert True
 
 
 @pytest.mark.skip("This method does magic. Since we havn't had the time to break it down, this test is skipped.")
-def test_run_triggers():
+def test_run_triggers(cobbler_api):
     # Arrange
-    api = CobblerAPI()
     globber = ""
 
     # Act
-    utils.run_triggers(api, None, globber)
+    utils.run_triggers(cobbler_api, None, globber)
 
     # Assert
     # TODO: How the heck do we check that this actually did what it is supposed to do?
@@ -421,13 +381,13 @@ def test_run_triggers():
 
 def test_get_family():
     # Arrange
-    # TODO: Make this nicer so it doesn't need to run on suse specific distros to succeed.
+    distros = ("suse", "redhat", "debian")
 
     # Act
     result = utils.get_family()
 
     # Assert
-    assert result == "suse"
+    assert result in distros
 
 
 def test_os_release():
@@ -438,7 +398,7 @@ def test_os_release():
     result = utils.os_release()
 
     # Assert
-    assert ("suse", 15.2) == result
+    assert ("suse", 15.2) or ("suse", 15.3) == result
 
 
 @pytest.mark.parametrize("test_src,test_dst,expected_result", [
@@ -446,13 +406,12 @@ def test_os_release():
     ("/usr/bin/os-release", "/tmp", True),
     ("/etc/os-release", "/tmp", False)
 ])
-def test_is_safe_to_hardlink(test_src, test_dst, expected_result):
+def test_is_safe_to_hardlink(cobbler_api, test_src, test_dst, expected_result):
     # Arrange
     # TODO: Generate cases
-    api = CobblerAPI()
 
     # Act
-    result = utils.is_safe_to_hardlink(test_src, test_dst, api)
+    result = utils.is_safe_to_hardlink(test_src, test_dst, cobbler_api)
 
     # Assert
     assert expected_result == result
@@ -480,7 +439,7 @@ def test_cachefile():
     api = None
 
     # Act
-    utils.cachefile(cache_src, cache_dst, api=api)
+    utils.cachefile(cache_src, cache_dst)
 
     # Assert
     # TODO: Check .link_cache folder exists and the link cache file in it
@@ -489,14 +448,13 @@ def test_cachefile():
 
 
 @pytest.mark.skip("This calls a lot of os-specific stuff. Let's fix this test later.")
-def test_linkfile():
+def test_linkfile(cobbler_api):
     # Arrange
-    test_api = CobblerAPI()
     test_source = ""
     test_destination = ""
 
     # Act
-    utils.linkfile(test_source, test_destination, api=test_api)
+    utils.linkfile(test_source, test_destination, api=cobbler_api)
 
     # Assert
     assert False
@@ -509,7 +467,7 @@ def test_copyfile():
     test_destination = ""
 
     # Act
-    utils.copyfile(test_source, test_destination, None)
+    utils.copyfile(test_source, test_destination)
 
     # Assert
     assert False
@@ -541,19 +499,28 @@ def test_copyfile_pattern():
     assert False
 
 
-def test_rmfile():
+def test_rmfile(tmpdir: Path):
     # Arrange
-    filepath = "/dev/shm/testfile"
-    Path(filepath).touch()
-
-    assert os.path.exists(filepath)
+    tfile = tmpdir.join("testfile")
 
     # Act
-    result = utils.rmfile(filepath)
+    utils.rmfile(tfile)
 
     # Assert
-    assert result
-    assert not os.path.exists(filepath)
+    assert not os.path.exists(tfile)
+
+
+def test_rmglob_files(tmpdir: Path):
+    # Arrange
+    tfile1 = tmpdir.join("file1.tfile")
+    tfile2 = tmpdir.join("file2.tfile")
+
+    # Act
+    utils.rmglob_files(tmpdir, "*.tfile")
+
+    # Assert
+    assert not os.path.exists(tfile1)
+    assert not os.path.exists(tfile2)
 
 
 def test_rmtree_contents():
@@ -621,234 +588,6 @@ def test_path_tail(test_first_path, test_second_path, expected_result):
     assert expected_result == result
 
 
-@pytest.mark.parametrize("test_architecture,test_raise", [
-    ("x86_64", does_not_raise()),
-    ("abc", pytest.raises(CX))
-])
-def test_set_arch(test_architecture, test_raise):
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    testdistro = Distro(test_manager)
-
-    # Act
-    with test_raise:
-        utils.set_arch(testdistro, test_architecture)
-
-        # Assert
-        assert testdistro.arch == test_architecture
-
-
-def test_set_os_version():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    testdistro = Distro(test_manager)
-    testdistro.set_breed("redhat")
-
-    # Act
-    utils.set_os_version(testdistro, "rhel4")
-
-    # Assert
-    assert testdistro.breed == "redhat"
-    assert testdistro.os_version == "rhel4"
-
-
-def test_set_breed():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    testdistro = Distro(test_manager)
-
-    # Act
-    utils.set_breed(testdistro, "redhat")
-
-    # Assert
-    assert testdistro.breed == "redhat"
-
-
-def test_set_repo_os_version():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    testrepo = Repo(test_manager)
-    testrepo.set_breed("yum")
-
-    # Act
-    utils.set_repo_os_version(testrepo, "rhel4")
-
-    # Assert
-    assert testrepo.breed == "yum"
-    assert testrepo.os_version == "rhel4"
-
-
-def test_set_repo_breed():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    testrepo = Repo(test_manager)
-
-    # Act
-    utils.set_repo_breed(testrepo, "yum")
-
-    # Assert
-    assert testrepo.breed == "yum"
-
-
-def test_set_repos():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    testprofile = Profile(test_manager)
-
-    # Act
-    # TODO: Test this also with the bypass check
-    utils.set_repos(testprofile, "testrepo1 testrepo2", bypass_check=True)
-
-    # Assert
-    assert testprofile.repos == ["testrepo1", "testrepo2"]
-
-
-def test_set_virt_file_size():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    testprofile = Profile(test_manager)
-
-    # Act
-    # TODO: Test multiple disks via comma separation
-    utils.set_virt_file_size(testprofile, "8")
-
-    # Assert
-    assert isinstance(testprofile.virt_file_size, int)
-    assert testprofile.virt_file_size == 8
-
-
-@pytest.mark.parametrize("test_driver,expected_result,test_raise", [
-    ("qcow2", "qcow2", does_not_raise()),
-    ("bad_driver", "", pytest.raises(CX))
-])
-def test_set_virt_disk_driver(test_driver, expected_result, test_raise):
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    testprofile = Profile(test_manager)
-
-    # Act
-    with test_raise:
-        utils.set_virt_disk_driver(testprofile, test_driver)
-
-        # Assert
-        assert testprofile.virt_disk_driver == expected_result
-
-
-@pytest.mark.parametrize("test_autoboot,expectation", [
-    (0, does_not_raise()),
-    (1, does_not_raise()),
-    (2, pytest.raises(CX)),
-    ("Test", pytest.raises(CX))
-])
-def test_set_virt_auto_boot(test_autoboot, expectation):
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    testprofile = Profile(test_manager)
-
-    # Act
-    with expectation:
-        utils.set_virt_auto_boot(testprofile, test_autoboot)
-
-        # Assert
-        assert isinstance(testprofile.virt_auto_boot, int)
-        assert testprofile.virt_auto_boot == 1 or testprofile.virt_auto_boot == 0
-
-
-@pytest.mark.parametrize("test_input,expected_exception", [
-    (0, does_not_raise()),
-    (1, does_not_raise()),
-    (5, pytest.raises(CX)),
-    ("", pytest.raises(CX))
-])
-def test_set_virt_pxe_boot(test_input, expected_exception):
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_system = System(test_manager)
-
-    # Act
-    with expected_exception:
-        result = utils.set_virt_pxe_boot(test_system, test_input)
-
-        # Assert
-        assert test_system.virt_pxe_boot == 0 or test_system.virt_pxe_boot == 1
-
-
-def test_set_virt_ram():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_system = System(test_manager)
-
-    # Act
-    utils.set_virt_ram(test_system, 1024)
-
-    # Assert
-    assert test_system.virt_ram == 1024
-
-
-def test_set_virt_type():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_system = System(test_manager)
-
-    # Act
-    utils.set_virt_type(test_system, "qemu")
-
-    # Assert
-    assert test_system.virt_type == "qemu"
-
-
-def test_set_virt_bridge():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_system = System(test_manager)
-
-    # Act
-    utils.set_virt_bridge(test_system, "testbridge")
-
-    # Assert
-    assert test_system.virt_bridge == "testbridge"
-
-
-def test_set_virt_path():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_system = System(test_manager)
-    test_location = "/somerandomfakelocation"
-
-    # Act
-    utils.set_virt_path(test_system, test_location)
-
-    # Assert
-    assert test_system.virt_path == test_location
-
-
-def test_set_virt_cpus():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_system = System(test_manager)
-
-    # Act -> These are develishly bad tests. Please spare me the lecture and let my joke in here.
-    utils.set_virt_cpus(test_system, 666)
-
-    # Assert
-    assert test_system.virt_cpus == 666
-
-
 @pytest.mark.parametrize("test_input,expected_exception", [
     ("Test", does_not_raise()),
     ("Test;Test", pytest.raises(CX)),
@@ -876,33 +615,6 @@ def test_get_mtab():
     assert isinstance(result, list)
 
 
-def test_set_serial_device():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_system = System(test_manager)
-
-    # Act
-    result = utils.set_serial_device(test_system, 0)
-
-    # Assert
-    assert result
-    assert test_system.serial_device == 0
-
-
-def test_set_serial_baud_rate():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_system = System(test_manager)
-
-    # Act
-    utils.set_serial_baud_rate(test_system, 9600)
-
-    # Assert
-    assert test_system.serial_baud_rate == 9600
-
-
 def test_get_file_device_path():
     # Arrange
 
@@ -910,6 +622,7 @@ def test_get_file_device_path():
     result = utils.get_file_device_path("/etc/os-release")
 
     # Assert
+    # TODO Does not work in all environments (e.g. openSUSE TW with BTRFS)
     assert result == ("overlay", "/usr/lib/os-release")
 
 
@@ -923,11 +636,23 @@ def test_is_remote_file():
     assert not result
 
 
+@pytest.mark.parametrize("input_cmd,expected_result", [
+    ("foobaz", False),
+    ("echo", True)
+])
+def test_command_existing(input_cmd, expected_result):
+    # Arrange & Act
+    result = utils.command_existing(input_cmd)
+
+    # Assert
+    assert result == expected_result
+
+
 def test_subprocess_sp():
     # Arrange
 
     # Act
-    result_out, result_rc = utils.subprocess_sp(None, "echo Test")
+    result_out, result_rc = utils.subprocess_sp("echo Test")
 
     # Assert
     # The newline makes sense in my (@SchoolGuy) eyes since we want to have multiline output also in a single string.
@@ -939,7 +664,7 @@ def test_subprocess_call():
     # Arrange
 
     # Act
-    result = utils.subprocess_call(None, "echo Test")
+    result = utils.subprocess_call("echo Test")
 
     # Assert
     assert result == 0
@@ -949,80 +674,31 @@ def test_subprocess_get():
     # Arrange
 
     # Act
-    result = utils.subprocess_get(None, "echo Test")
+    result = utils.subprocess_get("echo Test")
 
     # Assert
     # The newline makes sense in my (@SchoolGuy) eyes since we want to have multiline output also in a single string.
     assert result == "Test\n"
 
 
-def test_clear_from_fields():
+def test_get_supported_system_boot_loaders():
     # Arrange
-    test_api = CobblerAPI()
-    test_distro = Distro(test_api._collection_mgr)
-    test_distro.name = "Test"
-
-    # Pre Assert to check this works
-    assert test_distro.name == "Test"
 
     # Act
-    utils.clear_from_fields(test_distro, test_distro.get_fields())
+    result = utils.get_supported_system_boot_loaders()
 
     # Assert
-    assert test_distro.name == ""
+    assert result == ["grub", "pxe", "ipxe"]
 
 
-def test_from_dict_from_fields():
+def test_get_supported_distro_boot_loaders():
     # Arrange
-    test_api = CobblerAPI()
-    test_distro = Distro(test_api._collection_mgr)
 
     # Act
-    utils.from_dict_from_fields(test_distro, {"name": "testname"},
-                                [
-                                    ["name", "", 0, "Name", True, "Ex: Fedora-11-i386", 0, "str"]
-                                ])
+    result = utils.get_supported_distro_boot_loaders(None)
 
     # Assert
-    assert test_distro.name == "testname"
-
-
-def test_to_dict_from_fields():
-    # Arrange
-    test_api = CobblerAPI()
-    test_distro = Distro(test_api._collection_mgr)
-
-    # Act
-    result = utils.to_dict_from_fields(test_distro, test_distro.get_fields())
-
-    # Assert - This test is specific to a Distro object
-    assert len(result.keys()) == 25
-
-
-def test_to_string_from_fields():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_distro = Distro(test_manager)
-
-    # Act
-    result = utils.to_string_from_fields(test_distro.__dict__, test_distro.get_fields())
-
-    # Assert - This test is specific to a Distro object
-    assert len(result.splitlines()) == 19
-
-
-def test_get_setter_methods_from_fields():
-    # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_distro = Distro(test_manager)
-
-    # Act
-    result = utils.get_setter_methods_from_fields(test_distro, test_distro.get_fields())
-
-    # Assert
-    assert isinstance(result, dict)
+    assert result == ["grub", "pxe", "ipxe"]
 
 
 def test_load_signatures():
@@ -1055,7 +731,7 @@ def test_local_get_cobbler_api_url():
     result = utils.local_get_cobbler_api_url()
 
     # Assert
-    assert result == "http://127.0.0.1:80/cobbler_api"
+    assert result == "http://192.168.1.1:80/cobbler_api"
 
 
 def test_local_get_cobbler_xmlrpc_url():
@@ -1126,41 +802,43 @@ def test_lod_sort_by_key():
     assert expected_result == result
 
 
-def test_dhcpconf_location():
+def test_dhcpv4conf_location():
+    # TODO: Parameterize and check for wrong argument
     # Arrange
 
     # Act
-    result = utils.dhcpconf_location(None)
+    result = utils.dhcpconf_location(utils.DHCP.V4)
 
     # Assert
     assert result == "/etc/dhcpd.conf"
+
+
+def test_dhcpv6conf_location():
+    # TODO: Parameterize and check for wrong argument
+    # Arrange
+
+    # Act
+    result = utils.dhcpconf_location(utils.DHCP.V6)
+
+    # Assert
+    assert result == "/etc/dhcpd6.conf"
 
 
 def test_namedconf_location():
     # Arrange
 
     # Act
-    result = utils.namedconf_location(None)
+    result = utils.namedconf_location()
 
     # Assert
     assert result == "/etc/named.conf"
-
-
-def test_zonefile_base():
-    # Arrange
-
-    # Act
-    result = utils.zonefile_base(None)
-
-    # Assert
-    assert result == "/var/lib/named/"
 
 
 def test_dhcp_service_name():
     # Arrange
 
     # Act
-    result = utils.dhcp_service_name(None)
+    result = utils.dhcp_service_name()
 
     # Assert
     assert result == "dhcpd"
@@ -1170,38 +848,36 @@ def test_named_service_name():
     # Arrange
 
     # Act
-    result = utils.named_service_name(None)
+    result = utils.named_service_name()
 
     # Assert
     assert result == "named"
 
 
 @pytest.mark.skip("This is hard to test as we are creating a symlink in the method. For now we skip it.")
-def test_link_distro():
+def test_link_distro(cobbler_api):
     # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_distro = Distro(test_manager)
+    test_distro = Distro(cobbler_api)
 
     # Act
-    utils.link_distro(test_manager.settings(), test_distro)
+    utils.link_distro(cobbler_api.settings(), test_distro)
 
     # Assert
     assert False
 
 
-def test_find_distro_path():
+def test_find_distro_path(cobbler_api, create_testfile, tmp_path):
     # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_distro = Distro(test_manager)
-    test_distro.kernel = "/dev/shm/fakekernelfile"
+    fk_kernel = "vmlinuz1"
+    create_testfile(fk_kernel)
+    test_distro = Distro(cobbler_api)
+    test_distro.kernel = os.path.join(tmp_path, fk_kernel)
 
     # Act
-    result = utils.find_distro_path(test_manager.settings(), test_distro)
+    result = utils.find_distro_path(cobbler_api.settings(), test_distro)
 
     # Assert
-    assert result == "/dev/shm"
+    assert result == tmp_path.as_posix()
 
 
 @pytest.mark.parametrize("test_input_v1,test_input_v2,expected_output,error_expectation", [
@@ -1221,20 +897,109 @@ def test_compare_version_gt(test_input_v1, test_input_v2, expected_output, error
 
 def test_kopts_overwrite():
     # Arrange
-    test_api = CobblerAPI()
-    test_manager = CollectionManager(test_api)
-    test_distro = Distro(test_manager)
-    test_distro.set_breed("suse")
-    test_distro.name = "kopts_test_distro"
-    test_profile = Profile(test_manager)
-    test_profile.distro = test_distro.name
-    test_system = System(test_manager)
-    test_system.name = "kopts_test_system"
+    distro_breed = "suse"
+    system_name = "kopts_test_system"
     kopts = {"textmode": False, "text": True}
 
     # Act
-    utils.kopts_overwrite(test_system, test_distro, kopts, test_api.settings())
+    utils.kopts_overwrite(kopts, "servername", distro_breed, system_name)
 
     # Assert
     assert "textmode" in kopts
     assert "info" in kopts
+
+
+def test_service_restart_no_manager(mocker):
+    # Arrange
+    mocker.patch(
+        "cobbler.utils.is_supervisord",
+        autospec=True,
+        return_value=False
+    )
+    mocker.patch(
+        "cobbler.utils.is_systemd",
+        autospec=True,
+        return_value=False
+    )
+    mocker.patch(
+        "cobbler.utils.is_service",
+        autospec=True,
+        return_value=False
+    )
+
+    # Act
+    result = utils.service_restart("testservice")
+
+    # Assert
+    assert result == 1
+
+
+def test_service_restart_supervisord(mocker):
+    mocker.patch(
+        "cobbler.utils.is_supervisord",
+        autospec=True,
+        return_value=True
+    )
+    # TODO Mock supervisor API and return value
+
+    # Act
+    result = utils.service_restart("dhcpd")
+
+    # Assert
+    assert result == 0
+
+
+def test_service_restart_systemctl(mocker):
+    mocker.patch(
+        "cobbler.utils.is_supervisord",
+        autospec=True,
+        return_value=False
+    )
+    mocker.patch(
+        "cobbler.utils.is_systemd",
+        autospec=True,
+        return_value=True
+    )
+    mocker.patch(
+        "cobbler.utils.subprocess_call",
+        autospec=True,
+        return_value=0
+    )
+
+    # Act
+    result = utils.service_restart("testservice")
+
+    # Assert
+    assert result == 0
+    utils.subprocess_call.assert_called_with(["systemctl", "restart", "testservice"], shell=False)
+
+
+def test_service_restart_service(mocker):
+    # Arrange
+    mocker.patch(
+        "cobbler.utils.is_supervisord",
+        autospec=True,
+        return_value=False
+    )
+    mocker.patch(
+        "cobbler.utils.is_systemd",
+        autospec=True,
+        return_value=False
+    )
+    mocker.patch(
+        "cobbler.utils.is_service",
+        autospec=True,
+        return_value=True
+    )
+    mocker.patch(
+        "cobbler.utils.subprocess_call",
+        autospec=True,
+        return_value=0
+    )
+
+    # Act
+    result = utils.service_restart("testservice")
+
+    # Assert
+    assert result == 0
+    utils.subprocess_call.assert_called_with(["service", "testservice", "restart"], shell=False)

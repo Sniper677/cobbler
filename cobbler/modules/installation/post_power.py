@@ -20,7 +20,7 @@ class reboot(Thread):
         self.api.reboot(self.target)
 
 
-def register():
+def register() -> str:
     """
     The mandatory Cobbler module registration hook.
     """
@@ -29,29 +29,25 @@ def register():
     return "/var/lib/cobbler/triggers/install/post/*"
 
 
-def run(api, args, logger):
+def run(api, args) -> int:
     """
     Obligatory trigger hook.
 
     :param api: The api to resolve information with.
     :param args: This is an array containing two objects.
-                 0: String with the content "target" or "profile".
-                 1: The name of target or profile
-    :param logger: Unused parameter for this hook.
+                 0: The str "system". All other content will result in an early exit of the trigger.
+                 1: The name of the target system.
     :return: ``0`` on success.
     """
-    # FIXME: make everything use the logger
-
     objtype = args[0]
     name = args[1]
-    # boot_ip = args[2] # ip or "?"
 
     if objtype == "system":
         target = api.find_system(name)
     else:
         return 0
 
-    if target and 'postreboot' in target.autoinstall_meta:
+    if target and "postreboot" in target.autoinstall_meta:
         # Run this in a thread so the system has a chance to finish and umount the filesystem
         current = reboot(api, target)
         current.start()

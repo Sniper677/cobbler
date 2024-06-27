@@ -18,12 +18,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-from cobbler.actions import litesync
 from cobbler.cobbler_collections import collection
 from cobbler.items import system as system
 from cobbler import utils
 from cobbler.cexceptions import CX
-from cobbler.utils import _
 
 
 class Systems(collection.Collection):
@@ -40,42 +38,51 @@ class Systems(collection.Collection):
     def collection_types() -> str:
         return "systems"
 
-    def factory_produce(self, collection_mgr, item_dict):
+    def factory_produce(self, api, item_dict):
         """
         Return a Distro forged from item_dict
+
+        :param api: TODO
+        :param item_dict: TODO
+        :returns: TODO
         """
-        new_system = system.System(collection_mgr)
+        new_system = system.System(api)
         new_system.from_dict(item_dict)
         return new_system
 
-    def remove(self, name, with_delete=True, with_sync=True, with_triggers=True, recursive=False, logger=None):
+    def remove(self, name: str, with_delete: bool = True, with_sync: bool = True, with_triggers: bool = True,
+               recursive: bool = False):
         """
         Remove element named 'name' from the collection
+
+        :raises CX: In case the name of the object was not given.
         """
         name = name.lower()
         obj = self.find(name=name)
 
-        if obj is not None:
+        if obj is None:
+            raise CX("cannot delete an object that does not exist: %s" % name)
 
-            if with_delete:
-                if with_triggers:
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/delete/system/pre/*", [], logger)
-                if with_sync:
-                    lite_sync = litesync.CobblerLiteSync(self.collection_mgr, logger=logger)
-                    lite_sync.remove_single_system(name)
-            self.lock.acquire()
-            try:
-                del self.listing[name]
-            finally:
-                self.lock.release()
-            self.collection_mgr.serialize_delete(self, obj)
-            if with_delete:
-                if with_triggers:
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/delete/system/post/*", [], logger)
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/change/*", [], logger)
+        if with_delete:
+            if with_triggers:
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/delete/system/pre/*", [])
+            if with_sync:
+                lite_sync = self.api.get_sync()
+                lite_sync.remove_single_system(name)
 
-            return
+        if obj.parent is not None and obj.name in obj.parent.children:
+            obj.parent.children.remove(obj.name)
+            # ToDo: Only serialize parent object, use:
+            #       Use self.collection_mgr.serialize_one_item(obj.parent)
+            self.api.serialize()
 
-        raise CX(_("cannot delete an object that does not exist: %s") % name)
-
-# EOF
+        self.lock.acquire()
+        try:
+            del self.listing[name]
+        finally:
+            self.lock.release()
+        self.collection_mgr.serialize_delete(self, obj)
+        if with_delete:
+            if with_triggers:
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/delete/system/post/*", [])
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/change/*", [])

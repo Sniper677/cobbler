@@ -6,25 +6,26 @@ server.
 Based on:
 http://www.ithiriel.com/content/2010/03/29/writing-install-triggers-cobbler
 """
-from builtins import str
+import logging
 import re
 
 import cobbler.utils as utils
 
+logger = logging.getLogger()
 
-def register():
+
+def register() -> str:
     """
     This pure python trigger acts as if it were a legacy shell-trigger, but is much faster. The return of this method
     indicates the trigger type.
 
-    :return: Always: "/var/lib/cobbler/triggers/install/pre/\*"
-    :rtype: str
+    :return: Always `/var/lib/cobbler/triggers/install/pre/*`
     """
 
     return "/var/lib/cobbler/triggers/install/pre/*"
 
 
-def run(api, args, logger):
+def run(api, args) -> int:
     """
     This method runs the trigger, meaning in this case that old puppet certs are automatically removed via puppetca.
 
@@ -34,7 +35,6 @@ def run(api, args, logger):
 
     :param api: The api to resolve external information with.
     :param args: Already described above.
-    :param logger: The logger to audit the action with.
     :return: "0" on success. If unsuccessful this raises an exception.
     """
     objtype = args[0]
@@ -45,10 +45,10 @@ def run(api, args, logger):
 
     settings = api.settings()
 
-    if not str(settings.puppet_auto_setup).lower() in ["1", "yes", "y", "true"]:
+    if not settings.puppet_auto_setup:
         return 0
 
-    if not str(settings.remove_old_puppet_certs_automatically).lower() in ["1", "yes", "y", "true"]:
+    if not settings.remove_old_puppet_certs_automatically:
         return 0
 
     system = api.find_system(name)
@@ -68,13 +68,11 @@ def run(api, args, logger):
     rc = 0
 
     try:
-        rc = utils.subprocess_call(logger, cmd, shell=False)
+        rc = utils.subprocess_call(cmd, shell=False)
     except:
-        if logger is not None:
-            logger.warning("failed to execute %s" % puppetca_path)
+        logger.warning("failed to execute %s", puppetca_path)
 
     if rc != 0:
-        if logger is not None:
-            logger.warning("puppet cert removal for %s failed" % name)
+        logger.warning("puppet cert removal for %s failed", name)
 
     return 0

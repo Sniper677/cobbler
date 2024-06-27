@@ -20,8 +20,6 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-from builtins import Exception
-
 
 class CobblerException(Exception):
     """
@@ -55,20 +53,6 @@ class CobblerException(Exception):
 
 class CX(CobblerException):
     """
-    This is a general exception which get's thrown often inside Cobbler.
-    """
-    pass
-
-
-class FileNotFoundException(CobblerException):
-    """
-    This means that the required file was not found during the process of opening it.
-    """
-    pass
-
-
-class NotImplementedException(CobblerException):
-    """
-    On the command line interface not everything is always implemented. This is the exception which stated this.
+    This is a general exception which gets thrown often inside Cobbler.
     """
     pass

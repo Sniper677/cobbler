@@ -20,26 +20,34 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-from builtins import object
-import time
 import weakref
-import uuid
+from typing import Union, Dict, Any
 
 from cobbler.cexceptions import CX
-from cobbler.cobbler_collections import files, systems, mgmtclasses, distros, profiles, repos, packages, images
-from cobbler import settings
 from cobbler import serializer
+from cobbler.cobbler_collections.distros import Distros
+from cobbler.cobbler_collections.files import Files
+from cobbler.cobbler_collections.images import Images
+from cobbler.cobbler_collections.mgmtclasses import Mgmtclasses
+from cobbler.cobbler_collections.packages import Packages
+from cobbler.cobbler_collections.profiles import Profiles
+from cobbler.cobbler_collections.repos import Repos
+from cobbler.cobbler_collections.systems import Systems
+from cobbler.cobbler_collections.menus import Menus
 
 
-class CollectionManager(object):
+class CollectionManager:
+    """
+    Manages a definitive copy of all data cobbler_collections with weakrefs pointing back into the class so they can
+    understand each other's contents.
+    """
 
     has_loaded = False
-    __shared_state = {}
+    __shared_state: Dict[str, Any] = {}
 
     def __init__(self, api):
         """
-        Constructor. Manages a definitive copy of all data cobbler_collections with weakrefs
-        pointing back into the class so they can understand each other's contents
+        Constructor which loads all content if this action was not performed before.
         """
         self.__dict__ = CollectionManager.__shared_state
         if not CollectionManager.has_loaded:
@@ -53,27 +61,17 @@ class CollectionManager(object):
         """
         CollectionManager.has_loaded = True
 
-        self.init_time = time.time()
-        self.current_id = 0
         self.api = api
-        self._distros = distros.Distros(weakref.proxy(self))
-        self._repos = repos.Repos(weakref.proxy(self))
-        self._profiles = profiles.Profiles(weakref.proxy(self))
-        self._systems = systems.Systems(weakref.proxy(self))
-        self._images = images.Images(weakref.proxy(self))
-        self._mgmtclasses = mgmtclasses.Mgmtclasses(weakref.proxy(self))
-        self._packages = packages.Packages(weakref.proxy(self))
-        self._files = files.Files(weakref.proxy(self))
-        self._settings = settings.Settings()         # not a true collection
-
-    def generate_uid(self):
-        """
-        Cobbler itself does not use this GUID's though they are provided to allow for easier API linkage with other
-        applications. Cobbler uses unique names in each collection as the object id aka primary key.
-
-        :return: A version 4 UUID according to the python implementation of RFC 4122.
-        """
-        return uuid.uuid4().hex
+        self._distros = Distros(weakref.proxy(self))
+        self._repos = Repos(weakref.proxy(self))
+        self._profiles = Profiles(weakref.proxy(self))
+        self._systems = Systems(weakref.proxy(self))
+        self._images = Images(weakref.proxy(self))
+        self._mgmtclasses = Mgmtclasses(weakref.proxy(self))
+        self._packages = Packages(weakref.proxy(self))
+        self._files = Files(weakref.proxy(self))
+        self._menus = Menus(weakref.proxy(self))
+        # Not a true collection
 
     def distros(self):
         """
@@ -81,13 +79,13 @@ class CollectionManager(object):
         """
         return self._distros
 
-    def profiles(self):
+    def profiles(self) -> Profiles:
         """
         Return the definitive copy of the Profiles collection
         """
         return self._profiles
 
-    def systems(self):
+    def systems(self) -> Systems:
         """
         Return the definitive copy of the Systems collection
         """
@@ -97,37 +95,43 @@ class CollectionManager(object):
         """
         Return the definitive copy of the application settings
         """
-        return self._settings
+        return self.api.settings()
 
-    def repos(self):
+    def repos(self) -> Repos:
         """
         Return the definitive copy of the Repos collection
         """
         return self._repos
 
-    def images(self):
+    def images(self) -> Images:
         """
         Return the definitive copy of the Images collection
         """
         return self._images
 
-    def mgmtclasses(self):
+    def mgmtclasses(self) -> Mgmtclasses:
         """
         Return the definitive copy of the Mgmtclasses collection
         """
         return self._mgmtclasses
 
-    def packages(self):
+    def packages(self) -> Packages:
         """
         Return the definitive copy of the Packages collection
         """
         return self._packages
 
-    def files(self):
+    def files(self) -> Files:
         """
         Return the definitive copy of the Files collection
         """
         return self._files
+
+    def menus(self):
+        """
+        Return the definitive copy of the Menus collection
+        """
+        return self._menus
 
     def serialize(self):
         """
@@ -142,17 +146,42 @@ class CollectionManager(object):
         serializer.serialize(self._mgmtclasses)
         serializer.serialize(self._packages)
         serializer.serialize(self._files)
+        serializer.serialize(self._menus)
 
+    # pylint: disable=R0201
+    def serialize_one_item(self, item):
+        """
+        Save a collection item to disk
+
+        :param item: collection item
+        """
+        collection = self.get_items(item.COLLECTION_TYPE)
+        serializer.serialize_item(collection, item)
+
+    # pylint: disable=R0201
     def serialize_item(self, collection, item):
         """
         Save a collection item to disk
 
+        Deprecated - Use above serialize_one_item function instead
+        collection param can be retrieved
+
         :param collection: Collection
         :param item: collection item
         """
+        serializer.serialize_item(collection, item)
 
-        return serializer.serialize_item(collection, item)
+    # pylint: disable=R0201
+    def serialize_delete_one_item(self, item):
+        """
+        Save a collection item to disk
 
+        :param item: collection item
+        """
+        collection = self.get_items(item.COLLECTION_TYPE)
+        serializer.serialize_delete(collection, item)
+
+    # pylint: disable=R0201
     def serialize_delete(self, collection, item):
         """
         Delete a collection item from disk
@@ -160,8 +189,7 @@ class CollectionManager(object):
         :param collection: collection
         :param item: collection item
         """
-
-        return serializer.serialize_delete(collection, item)
+        serializer.serialize_delete(collection, item)
 
     def deserialize(self):
         """
@@ -169,9 +197,8 @@ class CollectionManager(object):
 
         :raises CX: if there is an error in deserialization
         """
-
         for collection in (
-            self._settings,
+            self._menus,
             self._distros,
             self._repos,
             self._profiles,
@@ -184,9 +211,11 @@ class CollectionManager(object):
             try:
                 serializer.deserialize(collection)
             except Exception as e:
-                raise CX("serializer: error loading collection %s: %s. Check /etc/cobbler/modules.conf" % (collection.collection_type(), e))
+                raise CX("serializer: error loading collection %s: %s. Check /etc/cobbler/modules.conf"
+                         % (collection.collection_type(), e)) from e
 
-    def get_items(self, collection_type):
+    def get_items(self, collection_type: str) -> Union[Distros, Profiles, Systems, Repos, Images, Mgmtclasses, Packages,
+                                                       Files, Menus]:
         """
         Get a full collection of a single type.
 
@@ -197,6 +226,7 @@ class CollectionManager(object):
         :return: The collection if ``collection_type`` is valid.
         :raises CX: If the ``collection_type`` is invalid.
         """
+        result: Union[Distros, Profiles, Systems, Repos, Images, Mgmtclasses, Packages, Files, Menus]
         if collection_type == "distro":
             result = self._distros
         elif collection_type == "profile":
@@ -213,8 +243,10 @@ class CollectionManager(object):
             result = self._packages
         elif collection_type == "file":
             result = self._files
+        elif collection_type == "menu":
+            result = self._menus
         elif collection_type == "settings":
-            result = self._settings
+            result = self.api.settings()
         else:
-            raise CX("internal error, collection name %s not supported" % collection_type)
+            raise CX("internal error, collection name \"%s\" not supported" % collection_type)
         return result

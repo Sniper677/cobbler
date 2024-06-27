@@ -21,36 +21,29 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-from builtins import object
 import urllib.parse
 import xml.dom.minidom
 
 from cobbler import templar
 from cobbler import utils
 from cobbler import validate
-from cobbler.cexceptions import FileNotFoundException, CX
-from cobbler.utils import _
+from cobbler.cexceptions import CX
 
 
-class AutoInstallationGen(object):
+class AutoInstallationGen:
     """
     Handles conversion of internal state to the tftpboot tree layout
     """
-    def __init__(self, collection_mgr):
+    def __init__(self, api):
         """
         Constructor
 
-        :param collection_mgr: The collection manager instance which is used for this object. Normally there is only one
+        :param api: The API instance which is used for this object. Normally there is only one
                                instance of the collection manager.
         """
-        self.collection_mgr = collection_mgr
-        self.api = collection_mgr.api
-        self.distros = collection_mgr.distros()
-        self.profiles = collection_mgr.profiles()
-        self.systems = collection_mgr.systems()
-        self.settings = collection_mgr.settings()
-        self.repos = collection_mgr.repos()
-        self.templar = templar.Templar(collection_mgr)
+        self.api = api
+        self.settings = api.settings()
+        self.templar = templar.Templar(self.api)
 
     def createAutoYaSTScript(self, document, script, name):
         """
@@ -98,7 +91,7 @@ class AutoInstallationGen(object):
             newChrootScripts.appendChild(self.createAutoYaSTScript(document, source, type + "_cobbler"))
             scripts[0].appendChild(newChrootScripts)
 
-    def generate_autoyast(self, profile=None, system=None, raw_data=None):
+    def generate_autoyast(self, profile=None, system=None, raw_data=None) -> str:
         """
         Generate auto installation information for SUSE distribution (AutoYaST XML file) for a specific system or
         general profile. Only a system OR profile can be supplied, NOT both.
@@ -107,7 +100,6 @@ class AutoInstallationGen(object):
         :param system: The system to generate the AutoYaST file for.
         :param raw_data: The raw data which should be included in the profile.
         :return: The generated AutoYaST XML file.
-        :rtype: str
         """
         self.api.logger.info("AutoYaST XML file found. Checkpoint: profile=%s system=%s" % (profile, system))
         runpost = "\ncurl \"http://%s/cblr/svc/op/trig/mode/post/%s/%s\" > /dev/null"
@@ -152,9 +144,8 @@ class AutoInstallationGen(object):
             cobblerElement.appendChild(cobblerElementSystem)
             cobblerElement.appendChild(cobblerElementProfile)
 
-            # FIXME: this is all broken and no longer works.
-            #        this entire if block should probably not be
-            #        hard-coded anyway
+            # FIXME: this is all broken and no longer works. This entire if block should probably not be hard-coded
+            #  anyway
             # self.api.log(document.childNodes[2].childNodes)
             # document.childNodes[1].insertBefore( cobblerElement, document.childNodes[2].childNodes[1])
             # document.childNodes[1].insertBefore( cobblerElement, document.childNodes[1].childNodes[0])
@@ -170,7 +161,7 @@ class AutoInstallationGen(object):
 
         return document.toxml()
 
-    def generate_repo_stanza(self, obj, is_profile=True):
+    def generate_repo_stanza(self, obj, is_profile: bool = True) -> str:
         """
         Automatically attaches yum repos to profiles/systems in automatic installation files (template files) that
         contain the magic $yum_repo_stanza variable. This includes repo objects as well as the yum repos that are part
@@ -180,7 +171,6 @@ class AutoInstallationGen(object):
         :param is_profile: If True then obj is a profile, otherwise obj has to be a system. Otherwise this method will
                            silently fail.
         :return: The string with the attached yum repos.
-        :rtype: str
         """
 
         buf = ""
@@ -235,7 +225,7 @@ class AutoInstallationGen(object):
 
         return buf
 
-    def generate_config_stanza(self, obj, is_profile=True):
+    def generate_config_stanza(self, obj, is_profile: bool = True):
         """
         Add in automatic to configure /etc/yum.repos.d on the remote system if the automatic installation file
         (template file) contains the magic $yum_config_stanza.
@@ -256,13 +246,13 @@ class AutoInstallationGen(object):
 
         return "curl \"%s\" --output /etc/yum.repos.d/cobbler-config.repo\n" % (url)
 
-    def generate_autoinstall_for_system(self, sys_name):
+    def generate_autoinstall_for_system(self, sys_name) -> str:
         """
         Generate an autoinstall config or script for a system.
 
         :param sys_name: The system name to generate an autoinstall script for.
         :return: The generated output or an error message with a human readable description.
-        :rtype: str
+        :raises CX: Raised in case the system references a missing profile.
         """
         s = self.api.find_system(name=sys_name)
         if s is None:
@@ -270,7 +260,8 @@ class AutoInstallationGen(object):
 
         p = s.get_conceptual_parent()
         if p is None:
-            raise CX(_("system %(system)s references missing profile %(profile)s") % {"system": s.name, "profile": s.profile})
+            raise CX("system %(system)s references missing profile %(profile)s"
+                     % {"system": s.name, "profile": s.profile})
 
         distro = p.get_conceptual_parent()
         if distro is None:
@@ -279,7 +270,7 @@ class AutoInstallationGen(object):
 
         return self.generate_autoinstall(profile=p, system=s)
 
-    def generate_autoinstall(self, profile=None, system=None):
+    def generate_autoinstall(self, profile=None, system=None) -> str:
         """
         This is an internal method for generating an autoinstall config/script. Please use the
         ``generate_autoinstall_for_*`` methods. If you insist on using this mehtod please only supply a profile or a
@@ -289,7 +280,6 @@ class AutoInstallationGen(object):
         :param system: The system to use for generating the autoinstall config/script. If both arguments are given,
                        this wins.
         :return: The autoinstall script or configuration file as a string.
-        :rtype: str
         """
         obj = system
         obj_type = "system"
@@ -330,24 +320,24 @@ class AutoInstallationGen(object):
 
         try:
             autoinstall_path = "%s/%s" % (self.settings.autoinstall_templates_dir, autoinstall_rel_path)
-            raw_data = utils.read_file_contents(autoinstall_path, self.api.logger)
+            raw_data = utils.read_file_contents(autoinstall_path)
 
-            data = self.templar.render(raw_data, meta, None, obj)
+            data = self.templar.render(raw_data, meta, None)
 
             return data
-        except FileNotFoundException:
+        except FileNotFoundError:
             error_msg = "automatic installation file %s not found at %s" \
                         % (meta["autoinstall"], self.settings.autoinstall_templates_dir)
             self.api.logger.warning(error_msg)
             return "# %s" % error_msg
 
-    def generate_autoinstall_for_profile(self, g):
+    def generate_autoinstall_for_profile(self, g) -> str:
         """
         Generate an autoinstall config or script for a profile.
 
         :param g: The Profile to generate the script/config for.
         :return: The generated output or an error message with a human readable description.
-        :rtype: str
+        :raises CX: Raised in case the profile references a missing distro.
         """
         g = self.api.find_profile(name=g)
         if g is None:
@@ -355,17 +345,16 @@ class AutoInstallationGen(object):
 
         distro = g.get_conceptual_parent()
         if distro is None:
-            raise CX(_("profile %(profile)s references missing distro %(distro)s")
+            raise CX("profile %(profile)s references missing distro %(distro)s"
                      % {"profile": g.name, "distro": g.distro})
 
         return self.generate_autoinstall(profile=g)
 
-    def get_last_errors(self):
+    def get_last_errors(self) -> list:
         """
         Returns the list of errors generated by the last template render action.
 
         :return: The list of error messages which are available. This may not only contain error messages related to
                  generating autoinstallation configuration and scripts.
-        :rtype: list
         """
         return self.templar.last_errors

@@ -6,7 +6,6 @@ TEST_POWER_MANAGEMENT = True
 TEST_SYSTEM = ""
 
 
-@pytest.mark.usefixtures("cobbler_xmlrpc_base")
 class TestNonObjectCalls:
 
     # TODO: Obsolete this method via a unittest method
@@ -14,10 +13,11 @@ class TestNonObjectCalls:
         """
         Wait until a task is finished
         """
-
         timeout = 0
         # "complete" is the constant: EVENT_COMPLETE from cobbler.remote
         while remote.get_task_status(tid)[2] != "complete":
+            if remote.get_task_status(tid)[2] == "failed":
+                pytest.fail("Task failed")
             print("task %s status: %s" % (tid, remote.get_task_status(tid)))
             time.sleep(5)
             timeout += 5
@@ -100,13 +100,13 @@ class TestNonObjectCalls:
         if TEST_SYSTEM:
             remote.generate_autoinstall(None, TEST_SYSTEM)
 
-    def test_generate_gpxe(self, remote):
+    def test_generate_ipxe(self, remote):
         """
-        Test: generate GPXE file content
+        Test: generate iPXE file content
         """
 
         if TEST_SYSTEM:
-            remote.generate_gpxe(None, TEST_SYSTEM)
+            remote.generate_ipxe(None, TEST_SYSTEM)
 
     def test_generate_bootcfg(self, remote):
         """

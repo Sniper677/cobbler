@@ -1,10 +1,9 @@
 import distutils.sysconfig
+import logging
 import sys
 import os
 import time
-import cobbler.templar
-from cobbler.utils import _
-from cobbler.cexceptions import CX
+from cobbler.templar import Templar
 
 plib = distutils.sysconfig.get_python_lib()
 mod_path = "%s/cobbler" % plib
@@ -12,8 +11,10 @@ sys.path.insert(0, mod_path)
 template_file = "/etc/cobbler/genders.template"
 settings_file = "/etc/genders"
 
+logger = logging.getLogger()
 
-def register():
+
+def register() -> str:
     """
     We should run anytime something inside of Cobbler changes.
 
@@ -24,19 +25,18 @@ def register():
 
 def write_genders_file(config, profiles_genders, distros_genders, mgmtcls_genders):
     """
-    Genders file is over-written when manage_genders is set in /var/lib/cobbler/settings.
+    Genders file is over-written when ``manage_genders`` is set in our settings.
 
-    :param config: The config file to template with the data.
+    :param config: The API instance to template the data with.
     :param profiles_genders: The profiles which should be included.
     :param distros_genders: The distros which should be included.
     :param mgmtcls_genders: The management classes which should be included.
+    :raises OSError: Raised in case the template could not be read.
     """
-
-    templar_inst = cobbler.templar.Templar(config)
     try:
         f2 = open(template_file, "r")
     except:
-        raise CX(_("error reading template: %s") % template_file)
+        raise OSError("error reading template: %s" % template_file)
     template_data = ""
     template_data = f2.read()
     f2.close()
@@ -48,20 +48,20 @@ def write_genders_file(config, profiles_genders, distros_genders, mgmtcls_gender
         "mgmtcls_genders": mgmtcls_genders
     }
 
-    templar_inst.render(template_data, metadata, settings_file, None)
+    templar_inst = Templar(config)
+    templar_inst.render(template_data, metadata, settings_file)
 
 
-def run(api, args, logger):
+def run(api, args) -> int:
     """
     Mandatory Cobbler trigger hook.
 
     :param api: The api to resolve information with.
     :param args: For this implementation unused.
-    :param logger: The logger to audit all actions with.
     :return: ``0`` or ``1``, depending on the outcome of the operation.
     """
     # do not run if we are not enabled.
-    if(not api.settings().manage_genders):
+    if not api.settings().manage_genders:
         return 0
 
     profiles_genders = dict()
@@ -82,7 +82,7 @@ def run(api, args, logger):
             profiles_genders[prof.name] += system.name + ","
         # remove a trailing comma
         profiles_genders[prof.name] = profiles_genders[prof.name][:-1]
-        if(profiles_genders[prof.name] == ""):
+        if profiles_genders[prof.name] == "":
             profiles_genders.pop(prof.name, None)
 
     # distros
@@ -93,7 +93,7 @@ def run(api, args, logger):
             distros_genders[dist.name] += system.name + ","
         # remove a trailing comma
         distros_genders[dist.name] = distros_genders[dist.name][:-1]
-        if(distros_genders[dist.name] == ""):
+        if distros_genders[dist.name] == "":
             distros_genders.pop(dist.name, None)
 
     # mgmtclasses
@@ -104,14 +104,14 @@ def run(api, args, logger):
             mgmtcls_genders[mgmtcls.name] += system.name + ","
         # remove a trailing comma
         mgmtcls_genders[mgmtcls.name] = mgmtcls_genders[mgmtcls.name][:-1]
-        if(mgmtcls_genders[mgmtcls.name] == ""):
+        if mgmtcls_genders[mgmtcls.name] == "":
             mgmtcls_genders.pop(mgmtcls.name, None)
     # The file doesn't exist and for some reason the template engine won't create it, so spit out an error and tell the
     # user what to do.
-    if(not os.path.isfile(settings_file)):
+    if not os.path.isfile(settings_file):
         logger.info("Error: " + settings_file + " does not exist.")
         logger.info("Please run: touch " + settings_file + " as root and try again.")
         return 1
 
-    write_genders_file(api._collection_mgr, profiles_genders, distros_genders, mgmtcls_genders)
+    write_genders_file(api, profiles_genders, distros_genders, mgmtcls_genders)
     return 0

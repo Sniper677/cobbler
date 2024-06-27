@@ -21,13 +21,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-from builtins import object
 import glob
-import time
 import gzip
 import re
-
-from cobbler import clogger
+import time
 
 # ARRAY INDEXES
 MOST_RECENT_START = 0
@@ -38,24 +35,19 @@ SEEN_STOP = 4
 STATE = 5
 
 
-class CobblerStatusReport(object):
+class CobblerStatusReport:
 
-    def __init__(self, collection_mgr, mode, logger=None):
+    def __init__(self, api, mode: str):
         """
         Constructor
 
-        :param collection_mgr: The collection manager which holds all information.
+        :param api: The API which holds all information.
         :param mode: This describes how Cobbler should report. Currently there only the option ``text`` can be set
                      explicitly.
-        :param logger: The logger to audit all actions with.
         """
-        self.collection_mgr = collection_mgr
-        self.settings = collection_mgr.settings()
+        self.settings = api.settings()
         self.ip_data = {}
         self.mode = mode
-        if logger is None:
-            logger = clogger.Logger()
-        self.logger = logger
 
     # -------------------------------------------------------
 
@@ -94,17 +86,14 @@ class CobblerStatusReport(object):
 
     # ------------------------------------------------------
 
-    def catalog(self, profile_or_system, name, ip, start_or_stop, ts):
+    def catalog(self, profile_or_system: str, name: str, ip, start_or_stop: str, ts: float):
         """
         Add a system to ``cobbler status``.
 
         :param profile_or_system: This can be ``system`` or ``profile``.
-        :type profile_or_system: str
         :param name: The name of the object.
-        :type name: str
         :param ip: The ip of the system to watch.
         :param start_or_stop: This parameter may be ``start`` or ``stop``
-        :type start_or_stop: str
         :param ts: Don't know what this does.
         """
         ip_data = self.ip_data

@@ -17,35 +17,32 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
+import uuid
 
-from cobbler import resource
+from cobbler.items import resource
 
 from cobbler.cexceptions import CX
-from cobbler.utils import _
-
-
-# this data structure is described in item.py
-FIELDS = [
-    # non-editable in UI (internal)
-    ["ctime", 0, 0, "", False, "", 0, "float"],
-    ["depth", 2, 0, "", False, "", 0, "float"],
-    ["mtime", 0, 0, "", False, "", 0, "float"],
-    ["uid", "", 0, "", False, "", 0, "str"],
-
-    # editable in UI
-    ["action", "create", 0, "Action", True, "Install or remove package resource", 0, "str"],
-    ["comment", "", 0, "Comment", True, "Free form text description", 0, "str"],
-    ["installer", "yum", 0, "Installer", True, "Package Manager", 0, "str"],
-    ["name", "", 0, "Name", True, "Name of file resource", 0, "str"],
-    ["owners", "SETTINGS:default_ownership", 0, "Owners", True, "Owners list for authz_ownership (space delimited)", [], "list"],
-    ["version", "", 0, "Version", True, "Package Version", 0, "str"],
-]
 
 
 class Package(resource.Resource):
+    """
+    This class represents a package which is being installed on a system.
+    """
 
-    TYPE_NAME = _("package")
+    TYPE_NAME = "package"
     COLLECTION_TYPE = "package"
+
+    def __init__(self, api, *args, **kwargs):
+        """
+        Constructor
+
+        :param api: The Cobbler API object which is used for resolving information.
+        :param args: The arguments which should be passed additionally to a Resource.
+        :param kwargs: The keyword arguments which should be passed additionally to a Resource.
+        """
+        super().__init__(api, *args, **kwargs)
+        self._installer = ""
+        self._version = ""
 
     #
     # override some base class methods first (item.Item)
@@ -58,46 +55,74 @@ class Package(resource.Resource):
         :return: The cloned instance of this object.
         """
         _dict = self.to_dict()
-        cloned = Package(self.collection_mgr)
+        cloned = Package(self.api)
         cloned.from_dict(_dict)
+        cloned.uid = uuid.uuid4().hex
         return cloned
-
-    def get_fields(self):
-        """
-        Return all fields which this class has with its current values.
-
-        :return: This is a list with lists.
-        """
-        return FIELDS
 
     def check_if_valid(self):
         """
         Checks if the object is in a valid state. This only checks currently if the name is present.
+
+        :raises CX: Raised in case name is not given.
         """
         if not self.name:
             raise CX("name is required")
+
+    def from_dict(self, dictionary: dict):
+        """
+        Initializes the object with attributes from the dictionary.
+
+        :param dictionary: The dictionary with values.
+        """
+        self._remove_depreacted_dict_keys(dictionary)
+        super().from_dict(dictionary)
 
     #
     # specific methods for item.Package
     #
 
-    def set_installer(self, installer):
+    @property
+    def installer(self) -> str:
+        """
+        Installer property.
+
+        :getter: Returns the value for ``installer``.
+        :setter: Sets the value for property ``installer``. Raises a TypeError if ``installer`` is no string.
+        """
+        return self._installer
+
+    @installer.setter
+    def installer(self, installer: str):
         """
         Setter for the installer parameter.
 
         :param installer: This parameter will be lowercased regardless of what string you give it.
-        :type installer: str
+        :raises TypeError: Raised in case ``installer`` is no string.
         """
-        self.installer = installer.lower()
+        if not isinstance(installer, str):
+            raise TypeError("Field installer of package object needs to be of type str!")
+        self._installer = installer.lower()
 
-    def set_version(self, version):
+    @property
+    def version(self) -> str:
+        """
+        Version property.
+
+        :getter: Returns the value for ``version``.
+        :setter: Sets the value for property ``version``. Raises a TypeError in case ``version`` is no string.
+        """
+        return self._version
+
+    @version.setter
+    def version(self, version: str):
         """
         Setter for the package version.
 
         :param version: They may be anything which is suitable for describing the version of a package. Internally this
                         is a string.
-        :type version: str
+        :raises TypeError: Raised in case ``version`` is no string.
         """
-        self.version = version
-
-# EOF
+        if not isinstance(version, str):
+            raise TypeError("Field version of package object needs to be of type str!")
+        self._version = version

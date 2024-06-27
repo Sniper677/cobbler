@@ -18,18 +18,15 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 02110-1301  USA
 """
 
-from cobbler.actions import litesync
 from cobbler.cobbler_collections import collection
 from cobbler.items import profile as profile
 from cobbler import utils
 from cobbler.cexceptions import CX
-from cobbler.utils import _
 
 
 class Profiles(collection.Collection):
     """
-    A profile represents a distro paired with an automatic OS installation
-    template file.
+    A profile represents a distro paired with an automatic OS installation template file.
     """
 
     @staticmethod
@@ -40,53 +37,59 @@ class Profiles(collection.Collection):
     def collection_types() -> str:
         return "profiles"
 
-
-    def factory_produce(self, collection_mgr, item_dict):
+    def factory_produce(self, api, item_dict):
         """
         Return a Distro forged from item_dict
         """
-        new_profile = profile.Profile(collection_mgr)
+        new_profile = profile.Profile(api)
         new_profile.from_dict(item_dict)
         return new_profile
 
-    def remove(self, name, with_delete=True, with_sync=True, with_triggers=True, recursive=False, logger=None):
+    def remove(self, name: str, with_delete: bool = True, with_sync: bool = True, with_triggers: bool = True,
+               recursive: bool = False):
         """
         Remove element named 'name' from the collection
+
+        :raises CX: In case the name of the object was not given or any other descendant would be orphaned.
         """
         name = name.lower()
         if not recursive:
-            for v in self.collection_mgr.systems():
+            for v in self.api.systems():
                 if v.profile is not None and v.profile.lower() == name:
-                    raise CX(_("removal would orphan system: %s") % v.name)
+                    raise CX("removal would orphan system: %s" % v.name)
 
         obj = self.find(name=name)
-        if obj is not None:
-            if recursive:
-                kids = obj.get_children()
-                for k in kids:
-                    if k.COLLECTION_TYPE == "profile":
-                        self.collection_mgr.api.remove_profile(k.name, recursive=recursive, delete=with_delete, with_triggers=with_triggers, logger=logger)
-                    else:
-                        self.collection_mgr.api.remove_system(k.name, recursive=recursive, delete=with_delete, with_triggers=with_triggers, logger=logger)
+        if obj is None:
+            raise CX("cannot delete an object that does not exist: %s" % name)
 
-            if with_delete:
-                if with_triggers:
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/delete/profile/pre/*", [], logger)
-            self.lock.acquire()
-            try:
-                del self.listing[name]
-            finally:
-                self.lock.release()
-            self.collection_mgr.serialize_delete(self, obj)
-            if with_delete:
-                if with_triggers:
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/delete/profile/post/*", [], logger)
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/change/*", [], logger)
-                if with_sync:
-                    lite_sync = litesync.CobblerLiteSync(self.collection_mgr, logger=logger)
-                    lite_sync.remove_single_profile(name)
-            return
+        if recursive:
+            kids = obj.get_children()
+            for k in kids:
+                if self.api.find_profile(name=k) is not None:
+                    self.api.remove_profile(k, recursive=recursive, delete=with_delete, with_triggers=with_triggers)
+                else:
+                    self.api.remove_system(k, recursive=recursive, delete=with_delete, with_triggers=with_triggers)
 
-        raise CX(_("cannot delete an object that does not exist: %s") % name)
+        if with_delete:
+            if with_triggers:
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/delete/profile/pre/*", [])
 
-# EOF
+        if obj.parent is not None and obj.name in obj.parent.children:
+            obj.parent.children.remove(obj.name)
+            # ToDo: Only serialize parent object, use:
+            #       Use self.collection_mgr.serialize_one_item(obj.parent)
+            self.api.serialize()
+
+        self.lock.acquire()
+        try:
+            del self.listing[name]
+        finally:
+            self.lock.release()
+        self.collection_mgr.serialize_delete(self, obj)
+        if with_delete:
+            if with_triggers:
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/delete/profile/post/*", [])
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/change/*", [])
+            if with_sync:
+                lite_sync = self.api.get_sync()
+                lite_sync.remove_single_profile(name)

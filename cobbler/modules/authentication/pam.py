@@ -36,7 +36,6 @@ a user against the Pluggable Authentication Modules (PAM) on the system.
 Implemented using ctypes, so no compilation is necessary.
 """
 
-from builtins import range
 from ctypes import CDLL, POINTER, Structure, CFUNCTYPE, cast, pointer, sizeof
 from ctypes import c_void_p, c_uint, c_char_p, c_char, c_int
 from ctypes.util import find_library
@@ -59,7 +58,7 @@ PAM_ERROR_MSG = 3
 PAM_TEXT_INFO = 4
 
 
-def register():
+def register() -> str:
     """
     The mandatory Cobbler module registration hook.
     """
@@ -115,16 +114,19 @@ PAM_AUTHENTICATE = LIBPAM.pam_authenticate
 PAM_AUTHENTICATE.restype = c_int
 PAM_AUTHENTICATE.argtypes = [PamHandle, c_int]
 
+PAM_ACCT_MGMT = LIBPAM.pam_acct_mgmt
+PAM_ACCT_MGMT.restype = c_int
+PAM_ACCT_MGMT.argtypes = [PamHandle, c_int]
 
-def authenticate(api_handle, username, password):
+
+def authenticate(api_handle, username: str, password: str) -> bool:
     """
+    Validate PAM authentication, returning whether the authentication was successful or not.
+
     :param api_handle: Used for resolving the the pam service name and getting the Logger.
-    :param username:The username to log in with.
-    :type username: str
+    :param username: The username to log in with.
     :param password: The password to log in with.
-    :type password: str
     :returns: True if the given username and password authenticate for the given service. Otherwise False
-    :rtype: bool
     """
 
     @CONV_FUNC
@@ -159,4 +161,8 @@ def authenticate(api_handle, username, password):
         return False
 
     retval = PAM_AUTHENTICATE(handle, 0)
+
+    if retval == 0:
+        retval = PAM_ACCT_MGMT(handle, 0)
+
     return retval == 0

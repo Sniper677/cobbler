@@ -13,7 +13,7 @@ import cobbler.templar as templar
 import cobbler.utils as utils
 
 
-def register():
+def register() -> str:
     """
     The mandatory Cobbler module registration hook.
 
@@ -24,24 +24,24 @@ def register():
     return "/var/lib/cobbler/triggers/install/post/*"
 
 
-def run(api, args, logger):
+def run(api, args) -> int:
     """
     This is the mandatory Cobbler module run trigger hook.
 
     :param api: The api to resolve information with.
     :param args: This is an array with three elements.
-                 0: "target" or "profile"
+                 0: "system" or "profile"
                  1: name of target or profile
                  2: ip or "?"
-    :param logger: In this module not used.
     :return: ``0`` or ``1``.
+    :raises CX: Raised if the blender result is empty.
     """
     # FIXME: make everything use the logger
 
     settings = api.settings()
 
     # go no further if this feature is turned off
-    if not str(settings.build_reporting_enabled).lower() in ["1", "yes", "y", "true"]:
+    if not settings.build_reporting_enabled:
         return 0
 
     objtype = args[0]
@@ -50,8 +50,10 @@ def run(api, args, logger):
 
     if objtype == "system":
         target = api.find_system(name)
-    else:
+    elif objtype == "profile":
         target = api.find_profile(name)
+    else:
+        return 1
 
     # collapse the object down to a rendered datastructure
     target = utils.blender(api, False, target)
@@ -75,33 +77,34 @@ def run(api, args, logger):
 
     subject = settings.build_reporting_subject
     if subject == "":
-        subject = '[Cobbler] install complete '
+        subject = "[Cobbler] install complete "
 
     to_addr = ",".join(to_addr)
     metadata = {
         "from_addr": from_addr,
         "to_addr": to_addr,
         "subject": subject,
-        "boot_ip": boot_ip
+        "boot_ip": boot_ip,
     }
     metadata.update(target)
 
-    input_template = open("/etc/cobbler/reporting/build_report_email.template")
-    input_data = input_template.read()
-    input_template.close()
+    with open("/etc/cobbler/reporting/build_report_email.template") as input_template:
+        input_data = input_template.read()
 
-    message = templar.Templar(api._config).render(input_data, metadata, None)
+        message = templar.Templar(api).render(
+            input_data, metadata, None
+        )
 
-    sendmail = True
-    for prefix in settings.build_reporting_ignorelist:
-        if prefix != '' and name.lower().startswith(prefix):
-            sendmail = False
+        sendmail = True
+        for prefix in settings.build_reporting_ignorelist:
+            if prefix != "" and name.lower().startswith(prefix):
+                sendmail = False
 
-    if sendmail:
-        # Send the mail
-        # FIXME: on error, return non-zero
-        server_handle = smtplib.SMTP(smtp_server)
-        server_handle.sendmail(from_addr, to_addr.split(','), message)
-        server_handle.quit()
+        if sendmail:
+            # Send the mail
+            # FIXME: on error, return non-zero
+            server_handle = smtplib.SMTP(smtp_server)
+            server_handle.sendmail(from_addr, to_addr.split(","), message)
+            server_handle.quit()
 
     return 0

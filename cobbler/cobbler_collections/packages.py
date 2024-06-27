@@ -22,7 +22,6 @@ from cobbler.cobbler_collections import collection
 from cobbler.items import package as package
 from cobbler import utils
 from cobbler.cexceptions import CX
-from cobbler.utils import _
 
 
 class Packages(collection.Collection):
@@ -38,39 +37,38 @@ class Packages(collection.Collection):
     def collection_types() -> str:
         return "packages"
 
-    def factory_produce(self, collection_mgr, item_dict):
+    def factory_produce(self, api, item_dict):
         """
         Return a Package forged from item_dict
         """
-        new_package = package.Package(collection_mgr)
+        new_package = package.Package(api)
         new_package.from_dict(item_dict)
         return new_package
 
-    def remove(self, name, with_delete=True, with_sync=True, with_triggers=True, recursive=False, logger=None):
+    def remove(self, name, with_delete: bool = True, with_sync: bool = True, with_triggers: bool = True,
+               recursive: bool = False):
         """
         Remove element named 'name' from the collection
+
+        :raises CX: In case the object does not exist.
         """
         name = name.lower()
         obj = self.find(name=name)
-        if obj is not None:
-            if with_delete:
-                if with_triggers:
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/delete/package/*", [], logger)
+        if obj is None:
+            raise CX("cannot delete an object that does not exist: %s" % name)
 
-            self.lock.acquire()
-            try:
-                del self.listing[name]
-            finally:
-                self.lock.release()
-            self.collection_mgr.serialize_delete(self, obj)
+        if with_delete:
+            if with_triggers:
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/delete/package/pre/*", [])
 
-            if with_delete:
-                if with_triggers:
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/delete/package/post/*", [], logger)
-                    utils.run_triggers(self.collection_mgr.api, obj, "/var/lib/cobbler/triggers/change/*", [], logger)
+        self.lock.acquire()
+        try:
+            del self.listing[name]
+        finally:
+            self.lock.release()
+        self.collection_mgr.serialize_delete(self, obj)
 
-            return
-
-        raise CX(_("cannot delete an object that does not exist: %s") % name)
-
-# EOF
+        if with_delete:
+            if with_triggers:
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/delete/package/post/*", [])
+                utils.run_triggers(self.api, obj, "/var/lib/cobbler/triggers/change/*", [])

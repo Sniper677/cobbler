@@ -1,30 +1,45 @@
-version: '3.7'
+version: '3.8'
 
 services:
-
-  centos7-build:
-    image: local/cobbler-centos7
-    container_name: cobbler-centos7
+  opensuse-leap-tests:
+    image: local/cobbler-test-opensuse-leap
     build:
       context: .
-      dockerfile: ./dockerfiles/CentOS7.dockerfile
-    volumes:
-      - ./rpm-build/el7:/usr/src/cobbler/rpm-build
+      dockerfile: docker/rpms/opensuse_leap/openSUSE_Leap153.dockerfile
+    container_name: cobbler-test-openSUSE-Leap
 
-  centos8-build:
-    image: local/cobbler-centos8
-    container_name: cobbler-centos8
+  opensuse-leap-build:
+    image: local/cobbler-opensuse-leap
+    container_name: cobbler-opensuse-leap
     build:
       context: .
-      dockerfile: ./dockerfiles/CentOS8.dockerfile
+      dockerfile: docker/rpms/opensuse_leap/openSUSE_Leap153.dockerfile
     volumes:
-      - ./rpm-build/el8:/usr/src/cobbler/rpm-build
+      - ./rpm-build/opensuse-leap:/usr/src/cobbler/rpm-build
 
-  fedora31-build:
-    image: local/cobbler-fedora31
-    container_name: cobbler-fedora31
+  opensuse-tumbleweed-build:
+    image: local/cobbler-opensuse-tumbleweed
+    container_name: cobbler-opensuse-tumbleweed
     build:
       context: .
-      dockerfile: ./dockerfiles/Fedora31.dockerfile
+      dockerfile: docker/rpms/opensuse_tumbleweed/openSUSE_TW.dockerfile
     volumes:
-      - ./rpm-build/f31:/usr/src/cobbler/rpm-build
+      - ./rpm-build/opensuse-tumbleweed:/usr/src/cobbler/rpm-build
+
+  rockylinux8-build:
+    image: local/cobbler-rockylinux8
+    container_name: cobbler-rockylinux8
+    build:
+      context: .
+      dockerfile: docker/rpms/Rocky_Linux_8/Rocky_Linux_8.dockerfile
+    volumes:
+      - ./rpm-build/rl8:/usr/src/cobbler/rpm-build
+
+  fedora34-build:
+    image: local/cobbler-fedora34
+    container_name: cobbler-fedora34
+    build:
+      context: .
+      dockerfile: docker/rpms/Fedora_34/Fedora34.dockerfile
+    volumes:
+      - ./rpm-build/f34:/usr/src/cobbler/rpm-build
